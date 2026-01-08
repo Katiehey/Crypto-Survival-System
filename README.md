@@ -1,0 +1,182 @@
+# Crypto Survival System
+
+**A private, AI-assisted trading system focused on capital preservation, controlled experimentation, and quiet compounding.**
+
+This repository exists to support **personal trading of my own funds only**.  
+It is designed to survive market uncertainty, not to chase performance.
+
+---
+
+## ⚠️ What This Is NOT
+
+- Not a signal service  
+- Not a prediction engine  
+- Not a trading bot sold to others  
+- Not financial advice  
+- Not a SaaS or commercial product  
+- Not a get-rich-quick scheme  
+- Not intended for public or third-party use  
+
+---
+
+## ✅ What This IS
+
+A **private, single-operator trading system** with:
+
+- Hard risk limits enforced in code  
+- AI used strictly for **offline analysis and regime classification**  
+- Simple, deterministic execution logic  
+- Explicit permission to **not trade**  
+- Full logging for review, debugging, and tax compliance  
+- Emphasis on *survival, consistency, and learning*  
+
+---
+
+## 🎯 Core Principles
+
+1. **Survival First**  
+   The system must prefer inactivity over forced participation.
+
+2. **Capital Preservation**  
+   - Max daily loss: **≤ 1%**  
+   - Max risk per trade: **0.25–0.5%**
+
+3. **No Live Self-Modification**  
+   - No parameter changes during live trading  
+   - No strategy mutation while capital is at risk  
+   - All adaptations occur **offline only**
+
+4. **AI Is a Supervisor, Not a Trader**  
+   - AI evaluates regimes and historical performance  
+   - AI does NOT place trades, size positions, or override rules
+
+5. **Radical Transparency**  
+   - Every decision is logged  
+   - Every trade is reproducible  
+   - Every system version is auditable
+
+6. **Legal, Private, and Boring**  
+   - Own capital only  
+   - No investors, no clients, no shared access  
+
+---
+
+## 💰 Capital Parameters
+
+- Starting Capital: **R500**  
+- Market Type: **Spot only**  
+- Exchange: **Binance**  
+- Primary Pair: **BTC/USDT**  
+- Position Risk: **0.25–0.5% per trade**  
+- Max Trades per Day: **2**  
+- Max Consecutive Losses: **2**  
+- Leverage: **None**
+
+> The system must remain viable even if capital growth is slow or flat.
+
+---
+
+## 🏗️ System Architecture
+
+Market Data
+↓
+Feature Engineering
+↓
+Regime Classifier (Offline AI)
+↓
+Strategy Gate (Rule-Based)
+↓
+Risk Engine (Hard Constraints)
+↓
+Execution (Spot Orders Only)
+↓
+Logging & Metrics
+↓
+Weekly Offline Review
+
+
+---
+
+## 🚀 Setup
+
+### Prerequisites
+
+- Python 3.10+  
+- Binance account (Spot trading enabled)  
+- Git  
+- No third-party automation services  
+
+---
+
+### Installation
+
+1. Clone repository:
+```bash
+git clone https://github.com/yourusername/crypto-survival-system.git
+cd crypto-survival-system
+
+2. Create virtual environment:
+python -m venv venv
+source venv/bin/activate  # Linux / macOS
+# venv\Scripts\activate   # Windows
+
+3. Install dependencies:
+pip install -r requirements.txt
+
+4. Configure environment variables:
+cp .env.example .env
+# Add Binance API keys (read + trade only, no withdrawal)
+
+5. Initialize local database:
+python scripts/setup_db.py
+
+📊 Usage Lifecycle
+Phase 1 — Research & Backtesting
+python scripts/run_backtest.py
+
+Phase 2 — Paper Trading (Minimum: several weeks)
+python scripts/run_paper.py
+
+Phase 3 — Live Trading (Micro Capital Only)
+python scripts/run_live.py
+Live trading is permitted only after stable paper performance and manual approval.
+
+🧠 Weekly Review (Offline Only)
+Run on a fixed schedule (e.g. Sundays):
+python evaluation/weekly_review.py
+
+Outputs:
+- Regime performance summaries
+- Strategy expectancy by regime
+- Drawdown statistics
+- Suggestions for offline experimentation
+No changes are deployed automatically.
+
+📝 Development Roadmap
+ - Repository scaffolding
+ - Market data ingestion
+ - Feature engineering module
+ - Regime classifier (offline)
+ - Risk engine
+ - First minimal strategy
+ - Backtesting framework
+ - Paper trading
+ - Live trading (micro size only)
+
+🔒 Security & Privacy
+- API keys stored in .env (never committed)
+- Private repository
+- No webhooks
+- No cloud execution
+- Logs stored locally
+- No outbound data sharing
+
+📈 Performance & Reporting
+- Performance is tracked for personal evaluation only
+- Results are not published, marketed, or shared
+- Withdrawals are periodic and conservative
+- Records are maintained for tax compliance
+
+📜 License
+Private Use Only
+This project is not licensed for redistribution, resale, or third-party use.
