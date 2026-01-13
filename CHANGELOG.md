@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Data update script for manual refreshes
 - Comprehensive data fetcher tests (8 tests)
 
+### Added
+- ATR (Average True Range) calculation
+- True Range calculation with gap handling
+- ATR percentile tracking over rolling window
+- ATR normalization (percentage of price)
+- Comprehensive ATR validation
+- 13 ATR tests with known values (all passing)
+- Real data validation script
+
 ## [0.3.0] - 2026-01-07
 
 ### Added

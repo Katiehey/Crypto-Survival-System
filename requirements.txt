@@ -4,6 +4,7 @@ ccxt>=4.2.0
 # Data manipulation
 pandas>=2.2.3
 numpy==1.26.2
+matplotlib
 
 # Environment management
 python-dotenv==1.0.0
