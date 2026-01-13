@@ -29,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 13 ATR tests with known values (all passing)
 - Real data validation script
 
+### Added
+- Efficiency Ratio (Kaufman) calculation
+- Efficiency percentile tracking
+- Efficiency smoothing for noise reduction
+- Trend strength classification (strong/moderate/weak/none)
+- 17 comprehensive efficiency tests (all passing)
+- Combined feature validation script
+
 ## [0.3.0] - 2026-01-07
 
 ### Added

@@ -276,43 +276,305 @@ def validate_atr(df: pd.DataFrame) -> Tuple[bool, str]:
 
 def main():
     """
-    Test ATR calculations with sample data.
+    Test feature calculations with sample data.
     """
     print("=" * 60)
-    print("ATR FEATURE CALCULATION TEST")
+    print("FEATURE CALCULATION TEST")
     print("=" * 60)
     
-    # Create sample data
+    # Create sample data with clear trend
     np.random.seed(42)
-    n = 100
+    n = 150 # Increased n to ensure enough data for 100-period percentiles
     
-    price = 42000
-    volatility = 500
+    # Create trending price data
+    trend = np.linspace(40000, 45000, n)  # Uptrend
+    noise = np.random.randn(n) * 50 # Reduced noise to ensure high efficiency
     
     df = pd.DataFrame({
-        'high': price + np.random.randn(n) * volatility + volatility,
-        'low': price + np.random.randn(n) * volatility - volatility,
-        'close': price + np.random.randn(n) * volatility,
+        'close': trend + noise,
+        'high': trend + noise + 100,
+        'low': trend + noise - 100,
     })
     
-    # Calculate ATR features
+    # Calculate all features
+    print("\n🔄 Calculating ATR features...")
     df = add_atr_features(df)
+    
+    print("🔄 Calculating Efficiency features...")
+    df = add_efficiency_features(df)
     
     # Display results
     print("\nSample Data (last 5 rows):")
-    print(df[['close', 'tr', 'atr', 'atr_pct', 'atr_percentile']].tail())
+    cols_to_show = [
+        'close', 'atr', 'atr_percentile',
+        'efficiency_ratio', 'efficiency_percentile', 'trend_strength'
+    ]
+    # Filter only columns that exist
+    print(df[[c for c in cols_to_show if c in df.columns]].tail())
     
     # Validation
-    is_valid, message = validate_atr(df)
-    print(f"\n{'✅' if is_valid else '❌'} Validation: {message}")
+    atr_valid, atr_msg = validate_atr(df)
+    eff_valid, eff_msg = validate_efficiency(df)
+    
+    print(f"\n{'✅' if atr_valid else '❌'} ATR Validation: {atr_msg}")
+    print(f"{'✅' if eff_valid else '❌'} Efficiency Validation: {eff_msg}")
     
     # Statistics
-    print("\nATR Statistics:")
-    print(f"  Mean ATR: {df['atr'].mean():.2f}")
-    print(f"  Median ATR: {df['atr'].median():.2f}")
-    print(f"  Mean ATR %: {df['atr_pct'].mean() * 100:.2f}%")
-    print(f"  ATR Range: {df['atr'].min():.2f} - {df['atr'].max():.2f}")
+    print("\n" + "=" * 60)
+    print("FEATURE STATISTICS")
+    print("=" * 60)
+    
+    if 'atr' in df.columns:
+        print("\nATR:")
+        print(f"  Mean: {df['atr'].mean():.2f}")
+        print(f"  Mean %: {df['atr_pct'].mean() * 100:.2f}%")
+    
+    if 'efficiency_ratio' in df.columns:
+        print("\nEfficiency Ratio:")
+        print(f"  Mean: {df['efficiency_ratio'].mean():.3f}")
+        print(f"  Median: {df['efficiency_ratio'].median():.3f}")
+        
+        print("\nTrend Strength Distribution:")
+        print(df['trend_strength'].value_counts())
 
+def calculate_efficiency_ratio(
+    close: pd.Series,
+    period: int = 10
+) -> pd.Series:
+    """
+    Calculate Kaufman Efficiency Ratio.
+    
+    Efficiency Ratio measures trend strength by comparing net price change
+    to total price movement.
+    
+    ER = |Net Price Change| / Sum of |Individual Price Changes|
+    
+    Values:
+    - 1.0 = Perfect trend (straight line)
+    - 0.5 = Moderate trend
+    - 0.0 = No trend (pure noise)
+    
+    Args:
+        close: Close prices
+        period: Lookback period for calculation (default: 10)
+        
+    Returns:
+        Series of Efficiency Ratio values (0 to 1)
+        
+    Example:
+        Price moves 100 -> 105 -> 110
+        Net change = 10
+        Total movement = 5 + 5 = 10
+        ER = 10/10 = 1.0 (perfect efficiency)
+        
+        Price moves 100 -> 110 -> 100
+        Net change = 0
+        Total movement = 10 + 10 = 20
+        ER = 0/20 = 0.0 (no efficiency, just noise)
+    """
+    if period < 2:
+        raise ValueError("Efficiency ratio period must be >= 2")
+    
+    # Net price change over period
+    net_change = (close - close.shift(period)).abs()
+    
+    # Sum of absolute price changes (volatility)
+    price_changes = close.diff().abs()
+    total_movement = price_changes.rolling(window=period).sum()
+    
+    # Efficiency Ratio = net change / total movement
+    # Handle division by zero (when total_movement = 0)
+    efficiency_ratio = net_change / total_movement.replace(0, np.nan)
+    
+    # Clip to [0, 1] range (should already be, but ensure)
+    efficiency_ratio = efficiency_ratio.clip(0, 1)
+    
+    return efficiency_ratio
+
+
+def calculate_efficiency_percentile(
+    efficiency: pd.Series,
+    lookback: int = 100
+) -> pd.Series:
+    """
+    Calculate Efficiency Ratio percentile over rolling window.
+    
+    Percentile indicates where current efficiency sits in historical distribution:
+    - 0 = lowest efficiency in lookback (ranging market)
+    - 50 = median
+    - 100 = highest efficiency in lookback (strong trend)
+    
+    Args:
+        efficiency: Efficiency Ratio values
+        lookback: Number of periods for percentile calculation
+        
+    Returns:
+        Series of efficiency percentile values (0-100)
+    """
+    if lookback < 2:
+        raise ValueError("Lookback period must be >= 2")
+    
+    def rolling_percentile(series):
+        """Calculate percentile of last value in rolling window."""
+        if len(series) < 2:
+            return np.nan
+        
+        current = series.iloc[-1]
+        percentile = (series < current).sum() / len(series) * 100
+        
+        return percentile
+    
+    efficiency_percentile = efficiency.rolling(window=lookback).apply(
+        rolling_percentile,
+        raw=False
+    )
+    
+    return efficiency_percentile
+
+
+def smooth_efficiency_ratio(
+    efficiency: pd.Series,
+    smoothing_period: int = 5
+) -> pd.Series:
+    """
+    Smooth Efficiency Ratio using simple moving average.
+    
+    Raw efficiency can be noisy. Smoothing helps identify sustained trends
+    vs temporary movements.
+    
+    Args:
+        efficiency: Raw efficiency ratio values
+        smoothing_period: Period for moving average smoothing
+        
+    Returns:
+        Smoothed efficiency ratio
+    """
+    if smoothing_period < 1:
+        raise ValueError("Smoothing period must be >= 1")
+    
+    smoothed = efficiency.rolling(window=smoothing_period).mean()
+    
+    return smoothed
+
+
+def classify_trend_strength(efficiency: pd.Series) -> pd.Series:
+    """
+    Classify trend strength based on Efficiency Ratio.
+    
+    Classification:
+    - 'strong_trend': ER >= 0.7
+    - 'moderate_trend': 0.4 <= ER < 0.7
+    - 'weak_trend': 0.2 <= ER < 0.4
+    - 'no_trend': ER < 0.2
+    
+    Args:
+        efficiency: Efficiency Ratio values
+        
+    Returns:
+        Series of trend strength labels
+    """
+    def classify(er):
+        if pd.isna(er):
+            return 'unknown'
+        elif er >= 0.7:
+            return 'strong_trend'
+        elif er >= 0.4:
+            return 'moderate_trend'
+        elif er >= 0.2:
+            return 'weak_trend'
+        else:
+            return 'no_trend'
+    
+    return efficiency.apply(classify)
+
+
+def add_efficiency_features(
+    df: pd.DataFrame,
+    period: int = 10,
+    smoothing_period: int = 5,
+    percentile_lookback: int = 100
+) -> pd.DataFrame:
+    """
+    Add all Efficiency Ratio features to DataFrame.
+    
+    Adds columns:
+    - 'efficiency_ratio': Raw efficiency ratio (0-1)
+    - 'efficiency_ratio_smooth': Smoothed efficiency ratio
+    - 'efficiency_percentile': Efficiency percentile over lookback
+    - 'trend_strength': Categorical trend strength label
+    
+    Args:
+        df: DataFrame with 'close' column
+        period: Period for efficiency calculation
+        smoothing_period: Period for smoothing
+        percentile_lookback: Lookback for percentile
+        
+    Returns:
+        DataFrame with efficiency features added
+        
+    Raises:
+        ValueError: If 'close' column missing
+    """
+    if 'close' not in df.columns:
+        raise ValueError("DataFrame must contain 'close' column")
+    
+    df = df.copy()
+    
+    # Calculate efficiency ratio
+    df['efficiency_ratio'] = calculate_efficiency_ratio(
+        df['close'],
+        period=period
+    )
+    
+    # Smoothed version
+    df['efficiency_ratio_smooth'] = smooth_efficiency_ratio(
+        df['efficiency_ratio'],
+        smoothing_period=smoothing_period
+    )
+    
+    # Percentile
+    df['efficiency_percentile'] = calculate_efficiency_percentile(
+        df['efficiency_ratio'],
+        lookback=percentile_lookback
+    )
+    
+    # Trend strength classification
+    df['trend_strength'] = classify_trend_strength(
+        df['efficiency_ratio_smooth']
+    )
+    
+    return df
+
+
+def validate_efficiency(df: pd.DataFrame) -> Tuple[bool, str]:
+    """
+    Validate Efficiency Ratio calculations.
+    """
+    if 'efficiency_ratio' not in df.columns:
+        return False, "Efficiency ratio column missing"
+    
+    er_values = df['efficiency_ratio'].dropna()
+    
+    if len(er_values) == 0:
+        return False, "No valid efficiency ratio values"
+    
+    # 1. Check for infinite values FIRST
+    if np.isinf(er_values).any():
+        return False, "Efficiency ratio contains infinite values"
+    
+    # 2. Check for values outside [0, 1]
+    # We use a small buffer (1e-6) for float precision if necessary
+    if (er_values < 0).any() or (er_values > 1.000001).any():
+        return False, "Efficiency ratio outside valid range [0, 1]"
+    
+    # 3. Check percentiles if present
+    if 'efficiency_percentile' in df.columns:
+        percentiles = df['efficiency_percentile'].dropna()
+        if len(percentiles) > 0:
+            if (percentiles < 0).any() or (percentiles > 100).any():
+                return False, "Efficiency percentile outside valid range [0, 100]"
+    
+    return True, "Efficiency validation passed"
 
 if __name__ == "__main__":
     main()
