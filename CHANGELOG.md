@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Troubleshooting guide
 - Updated README with development progress
 
+### Added
+- Data fetcher implementation using CCXT
+- OHLCV candle storage in SQLite
+- Rate limit handling and error recovery
+- Data update script for manual refreshes
+- Comprehensive data fetcher tests (8 tests)
+
 ## [0.3.0] - 2026-01-07
 
 ### Added

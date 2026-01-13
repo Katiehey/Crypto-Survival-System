@@ -7,11 +7,10 @@ API keys are loaded from environment variables ONLY.
 
 import os
 from typing import Optional
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 import ccxt
 
-load_dotenv()
-
+load_dotenv(find_dotenv(usecwd=True), override=True)
 
 class ExchangeConfig:
     """
@@ -25,6 +24,10 @@ class ExchangeConfig:
         self.api_secret: Optional[str] = os.getenv('BINANCE_API_SECRET')
         self.use_testnet: bool = os.getenv('BINANCE_TESTNET', 'true').lower() == 'true'
         
+        print(f"DEBUG: API Key from env: {os.getenv('BINANCE_API_KEY')[:5]}***")
+        print(f"DEBUG: Testnet setting: {os.getenv('BINANCE_TESTNET')}")
+    
+        self.api_key: Optional[str] = os.getenv('BINANCE_API_KEY')
         # Validate credentials exist
         if not self.api_key or self.api_key == 'your_api_key_here':
             self.api_key = None

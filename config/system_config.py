@@ -14,10 +14,10 @@ DO NOT modify these values casually.
 from dataclasses import dataclass
 from typing import Literal
 import os
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
 # Load environment variables
-load_dotenv()
+load_dotenv(find_dotenv(usecwd=True), override=True)
 
 
 @dataclass(frozen=True)
@@ -80,6 +80,7 @@ class SystemConfig:
     These define how the system operates but are less critical
     than RiskLimits.
     """
+    DB_PATH: str = os.getenv('DB_PATH', 'trading.db') 
     
     # Exchange
     EXCHANGE: str = "binance"
