@@ -851,5 +851,177 @@ def validate_volume(df: pd.DataFrame) -> Tuple[bool, str]:
     
     return True, "Volume validation passed"
 
+def calculate_all_features(
+    df: pd.DataFrame,
+    atr_period: int = 14,
+    efficiency_period: int = 10,
+    volume_ma_period: int = 20,
+    percentile_lookback: int = 100
+) -> pd.DataFrame:
+    """
+    Calculate all regime features in one pass.
+    
+    This is the main entry point for feature calculation.
+    
+    Features calculated:
+    - ATR family (tr, atr, atr_pct, atr_percentile)
+    - Efficiency family (efficiency_ratio, efficiency_ratio_smooth, 
+                         efficiency_percentile, trend_strength)
+    - Volume family (volume_ma, volume_ratio, volume_percentile,
+                     volume_regime, volume_spike)
+    
+    Args:
+        df: DataFrame with OHLCV columns (high, low, close, volume)
+        atr_period: ATR calculation period
+        efficiency_period: Efficiency ratio period
+        volume_ma_period: Volume MA period
+        percentile_lookback: Lookback for all percentile calculations
+        
+    Returns:
+        DataFrame with all features added
+        
+    Raises:
+        ValueError: If required columns missing
+        
+    Example:
+        >>> df = fetcher.load_candles(limit=200)
+        >>> df = calculate_all_features(df)
+        >>> print(df[['close', 'atr', 'efficiency_ratio', 'volume_ratio']].tail())
+    """
+    # Validate input
+    required_cols = ['high', 'low', 'close', 'volume']
+    missing = [col for col in required_cols if col not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}")
+    
+    print("🔄 Calculating features...")
+    
+    # Calculate ATR features
+    print("   - ATR (volatility metrics)")
+    df = add_atr_features(
+        df,
+        atr_period=atr_period,
+        percentile_lookback=percentile_lookback
+    )
+    
+    # Calculate Efficiency features
+    print("   - Efficiency Ratio (trend strength)")
+    df = add_efficiency_features(
+        df,
+        period=efficiency_period,
+        percentile_lookback=percentile_lookback
+    )
+    
+    # Calculate Volume features
+    print("   - Volume metrics (participation)")
+    df = add_volume_features(
+        df,
+        ma_period=volume_ma_period,
+        percentile_lookback=percentile_lookback
+    )
+    
+    print("✅ Feature calculation complete")
+    
+    return df
+
+
+def validate_all_features(df: pd.DataFrame) -> Tuple[bool, dict]:
+    """
+    Validate all feature calculations.
+    
+    Args:
+        df: DataFrame with all features
+        
+    Returns:
+        (all_valid, validation_results)
+        where validation_results is dict with individual results
+    """
+    results = {}
+    
+    # Validate each feature type
+    atr_valid, atr_msg = validate_atr(df)
+    results['atr'] = {'valid': atr_valid, 'message': atr_msg}
+    
+    eff_valid, eff_msg = validate_efficiency(df)
+    results['efficiency'] = {'valid': eff_valid, 'message': eff_msg}
+    
+    vol_valid, vol_msg = validate_volume(df)
+    results['volume'] = {'valid': vol_valid, 'message': vol_msg}
+    
+    # Overall validity
+    all_valid = atr_valid and eff_valid and vol_valid
+    
+    return all_valid, results
+
+
+def get_feature_summary(df: pd.DataFrame) -> dict:
+    """
+    Get summary statistics for all features.
+    
+    Args:
+        df: DataFrame with all features
+        
+    Returns:
+        Dictionary with summary statistics
+    """
+    summary = {}
+    
+    # ATR summary
+    if 'atr' in df.columns:
+        summary['atr'] = {
+            'mean': df['atr'].mean(),
+            'median': df['atr'].median(),
+            'current': df['atr'].iloc[-1] if len(df) > 0 else None,
+            'mean_pct': df['atr_pct'].mean() * 100 if 'atr_pct' in df.columns else None,
+            'percentile': df['atr_percentile'].iloc[-1] if 'atr_percentile' in df.columns and len(df) > 0 else None
+        }
+    
+    # Efficiency summary
+    if 'efficiency_ratio' in df.columns:
+        summary['efficiency'] = {
+            'mean': df['efficiency_ratio'].mean(),
+            'median': df['efficiency_ratio'].median(),
+            'current': df['efficiency_ratio'].iloc[-1] if len(df) > 0 else None,
+            'current_strength': df['trend_strength'].iloc[-1] if 'trend_strength' in df.columns and len(df) > 0 else None,
+            'strength_distribution': df['trend_strength'].value_counts().to_dict() if 'trend_strength' in df.columns else None
+        }
+    
+    # Volume summary
+    if 'volume' in df.columns:
+        summary['volume'] = {
+            'mean': df['volume'].mean(),
+            'median': df['volume'].median(),
+            'current': df['volume'].iloc[-1] if len(df) > 0 else None,
+            'current_ratio': df['volume_ratio'].iloc[-1] if 'volume_ratio' in df.columns and len(df) > 0 else None,
+            'current_regime': df['volume_regime'].iloc[-1] if 'volume_regime' in df.columns and len(df) > 0 else None,
+            'spikes_detected': df['volume_spike'].sum() if 'volume_spike' in df.columns else 0,
+            'regime_distribution': df['volume_regime'].value_counts().to_dict() if 'volume_regime' in df.columns else None
+        }
+    
+    return summary
+
+
+def export_features_csv(df: pd.DataFrame, filepath: str) -> None:
+    """
+    Export features to CSV file.
+    
+    Args:
+        df: DataFrame with features
+        filepath: Output file path
+    """
+    # Select feature columns
+    feature_cols = [
+        'timestamp', 'datetime', 'open', 'high', 'low', 'close', 'volume',
+        'tr', 'atr', 'atr_pct', 'atr_percentile',
+        'efficiency_ratio', 'efficiency_ratio_smooth', 'efficiency_percentile', 'trend_strength',
+        'volume_ma', 'volume_ratio', 'volume_percentile', 'volume_regime', 'volume_spike'
+    ]
+    
+    # Only include columns that exist
+    cols_to_export = [col for col in feature_cols if col in df.columns]
+    
+    df[cols_to_export].to_csv(filepath, index=False)
+    print(f"✅ Features exported to {filepath}")
+
 if __name__ == "__main__":
     main()

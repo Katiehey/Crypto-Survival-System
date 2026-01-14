@@ -46,6 +46,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 18 comprehensive volume tests (all passing)
 - Complete feature pipeline integration test
 
+### Added
+- Unified feature calculation pipeline (calculate_all_features)
+- Complete feature validation function
+- Feature summary statistics generator
+- CSV export functionality for features
+- Feature calculation script (scripts/calculate_features.py)
+- 9 integration tests for complete pipeline
+- Comprehensive feature documentation (docs/FEATURES.md)
+
 ## [0.3.0] - 2026-01-07
 
 ### Added
