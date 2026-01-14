@@ -276,24 +276,31 @@ def validate_atr(df: pd.DataFrame) -> Tuple[bool, str]:
 
 def main():
     """
-    Test feature calculations with sample data.
+    Test all feature calculations with sample data.
     """
     print("=" * 60)
     print("FEATURE CALCULATION TEST")
     print("=" * 60)
     
-    # Create sample data with clear trend
+    # Create sample data with clear trend and varying volume
     np.random.seed(42)
-    n = 150 # Increased n to ensure enough data for 100-period percentiles
+    n = 100
     
     # Create trending price data
-    trend = np.linspace(40000, 45000, n)  # Uptrend
-    noise = np.random.randn(n) * 50 # Reduced noise to ensure high efficiency
+    trend = np.linspace(40000, 45000, n)
+    noise = np.random.randn(n) * 200
+    
+    # Create volume with some spikes
+    base_volume = 100
+    volume = base_volume + np.random.randn(n) * 20
+    volume[50] = base_volume * 3  # Spike at position 50
+    volume = np.abs(volume)  # Ensure positive
     
     df = pd.DataFrame({
         'close': trend + noise,
         'high': trend + noise + 100,
         'low': trend + noise - 100,
+        'volume': volume,
     })
     
     # Calculate all features
@@ -303,39 +310,55 @@ def main():
     print("🔄 Calculating Efficiency features...")
     df = add_efficiency_features(df)
     
+    print("🔄 Calculating Volume features...")
+    df = add_volume_features(df)
+    
     # Display results
     print("\nSample Data (last 5 rows):")
     cols_to_show = [
-        'close', 'atr', 'atr_percentile',
-        'efficiency_ratio', 'efficiency_percentile', 'trend_strength'
+        'close', 'volume', 'volume_ratio', 'volume_regime',
+        'atr_percentile', 'efficiency_ratio', 'trend_strength'
     ]
-    # Filter only columns that exist
-    print(df[[c for c in cols_to_show if c in df.columns]].tail())
+    # Use only columns that exist to prevent errors
+    existing_cols = [c for c in cols_to_show if c in df.columns]
+    print(df[existing_cols].tail())
     
     # Validation
     atr_valid, atr_msg = validate_atr(df)
     eff_valid, eff_msg = validate_efficiency(df)
+    vol_valid, vol_msg = validate_volume(df)
     
-    print(f"\n{'✅' if atr_valid else '❌'} ATR Validation: {atr_msg}")
-    print(f"{'✅' if eff_valid else '❌'} Efficiency Validation: {eff_msg}")
+    print(f"\n{'✅' if atr_valid else '❌'} ATR: {atr_msg}")
+    print(f"{'✅' if eff_valid else '❌'} Efficiency: {eff_msg}")
+    print(f"{'✅' if vol_valid else '❌'} Volume: {vol_msg}")
     
     # Statistics
     print("\n" + "=" * 60)
     print("FEATURE STATISTICS")
     print("=" * 60)
     
-    if 'atr' in df.columns:
+    if 'atr_pct' in df.columns:
         print("\nATR:")
-        print(f"  Mean: {df['atr'].mean():.2f}")
         print(f"  Mean %: {df['atr_pct'].mean() * 100:.2f}%")
     
     if 'efficiency_ratio' in df.columns:
         print("\nEfficiency Ratio:")
         print(f"  Mean: {df['efficiency_ratio'].mean():.3f}")
-        print(f"  Median: {df['efficiency_ratio'].median():.3f}")
-        
+    
+    if 'volume_ratio' in df.columns:
+        print("\nVolume:")
+        print(f"  Mean: {df['volume'].mean():.2f}")
+        print(f"  Mean ratio: {df['volume_ratio'].mean():.2f}")
+        print(f"  Spikes detected: {df['volume_spike'].sum()}")
+    
+    if 'volume_regime' in df.columns:
+        print("\nVolume Regime Distribution:")
+        print(df['volume_regime'].value_counts())
+    
+    if 'trend_strength' in df.columns:
         print("\nTrend Strength Distribution:")
         print(df['trend_strength'].value_counts())
+
 
 def calculate_efficiency_ratio(
     close: pd.Series,
@@ -575,6 +598,258 @@ def validate_efficiency(df: pd.DataFrame) -> Tuple[bool, str]:
                 return False, "Efficiency percentile outside valid range [0, 100]"
     
     return True, "Efficiency validation passed"
+
+def calculate_volume_ma(
+    volume: pd.Series,
+    period: int = 20
+) -> pd.Series:
+    """
+    Calculate volume moving average.
+    
+    Args:
+        volume: Volume values
+        period: MA period (default: 20)
+        
+    Returns:
+        Series of volume moving average
+    """
+    if period < 1:
+        raise ValueError("Volume MA period must be >= 1")
+    
+    volume_ma = volume.rolling(window=period).mean()
+    
+    return volume_ma
+
+
+def calculate_volume_ratio(
+    volume: pd.Series,
+    volume_ma: pd.Series
+) -> pd.Series:
+    """
+    Calculate volume ratio (current volume / average volume).
+    
+    Ratio interpretation:
+    - > 2.0: Very high volume
+    - 1.5-2.0: High volume
+    - 0.5-1.5: Normal volume
+    - < 0.5: Low volume
+    
+    Args:
+        volume: Current volume values
+        volume_ma: Volume moving average
+        
+    Returns:
+        Series of volume ratio values
+    """
+    # Avoid division by zero
+    volume_ma_safe = volume_ma.replace(0, np.nan)
+    
+    volume_ratio = volume / volume_ma_safe
+    
+    return volume_ratio
+
+
+def calculate_volume_percentile(
+    volume: pd.Series,
+    lookback: int = 100
+) -> pd.Series:
+    """
+    Calculate volume percentile over rolling window.
+    
+    Percentile indicates where current volume sits in distribution:
+    - 0 = lowest volume in lookback
+    - 50 = median volume
+    - 100 = highest volume in lookback
+    
+    Args:
+        volume: Volume values
+        lookback: Lookback period
+        
+    Returns:
+        Series of volume percentile values (0-100)
+    """
+    if lookback < 2:
+        raise ValueError("Lookback period must be >= 2")
+    
+    def rolling_percentile(series):
+        """Calculate percentile of last value in rolling window."""
+        if len(series) < 2:
+            return np.nan
+        
+        current = series.iloc[-1]
+        percentile = (series <= current).sum() / len(series) * 100
+        
+        return percentile
+    
+    volume_percentile = volume.rolling(window=lookback).apply(
+        rolling_percentile,
+        raw=False
+    )
+    
+    return volume_percentile
+
+
+def classify_volume_regime(volume_ratio: pd.Series) -> pd.Series:
+    """
+    Classify volume regime based on volume ratio.
+    
+    Classification:
+    - 'very_high': ratio >= 2.0
+    - 'high': 1.5 <= ratio < 2.0
+    - 'normal': 0.5 <= ratio < 1.5
+    - 'low': ratio < 0.5
+    
+    Args:
+        volume_ratio: Volume ratio values
+        
+    Returns:
+        Series of volume regime labels
+    """
+    def classify(ratio):
+        if pd.isna(ratio):
+            return 'unknown'
+        elif ratio >= 2.0:
+            return 'very_high'
+        elif ratio >= 1.5:
+            return 'high'
+        elif ratio >= 0.5:
+            return 'normal'
+        else:
+            return 'low'
+    
+    return volume_ratio.apply(classify)
+
+
+def detect_volume_spike(
+    volume_ratio: pd.Series,
+    threshold: float = 2.0
+) -> pd.Series:
+    """
+    Detect volume spikes (significantly above average).
+    
+    Volume spikes often indicate:
+    - Breakouts (if accompanied by price move)
+    - Capitulation (if at extremes)
+    - News events
+    - Institutional activity
+    
+    Args:
+        volume_ratio: Volume ratio values
+        threshold: Spike threshold (default: 2.0 = 200% of average)
+        
+    Returns:
+        Boolean series (True = spike detected)
+    """
+    return volume_ratio >= threshold
+
+
+def add_volume_features(
+    df: pd.DataFrame,
+    ma_period: int = 20,
+    percentile_lookback: int = 100
+) -> pd.DataFrame:
+    """
+    Add all volume features to DataFrame.
+    
+    Adds columns:
+    - 'volume_ma': Volume moving average
+    - 'volume_ratio': Current volume / average volume
+    - 'volume_percentile': Volume percentile over lookback
+    - 'volume_regime': Categorical volume classification
+    - 'volume_spike': Boolean spike indicator
+    
+    Args:
+        df: DataFrame with 'volume' column
+        ma_period: Period for volume MA
+        percentile_lookback: Lookback for percentile
+        
+    Returns:
+        DataFrame with volume features added
+        
+    Raises:
+        ValueError: If 'volume' column missing
+    """
+    if 'volume' not in df.columns:
+        raise ValueError("DataFrame must contain 'volume' column")
+    
+    df = df.copy()
+    
+    # Volume moving average
+    df['volume_ma'] = calculate_volume_ma(df['volume'], period=ma_period)
+    
+    # Volume ratio
+    df['volume_ratio'] = calculate_volume_ratio(
+        df['volume'],
+        df['volume_ma']
+    )
+    
+    # Volume percentile
+    df['volume_percentile'] = calculate_volume_percentile(
+        df['volume'],
+        lookback=percentile_lookback
+    )
+    
+    # Volume regime classification
+    df['volume_regime'] = classify_volume_regime(df['volume_ratio'])
+    
+    # Volume spike detection
+    df['volume_spike'] = detect_volume_spike(df['volume_ratio'])
+    
+    return df
+
+
+def validate_volume(df: pd.DataFrame) -> Tuple[bool, str]:
+    """
+    Validate volume calculations.
+    
+    Checks:
+    - No negative values
+    - No infinite values
+    - Percentiles in valid range
+    - Ratios are reasonable
+    
+    Args:
+        df: DataFrame with volume features
+        
+    Returns:
+        (is_valid, error_message)
+    """
+    # Check volume exists
+    if 'volume' not in df.columns:
+        return False, "Volume column missing"
+    
+    volume_values = df['volume'].dropna()
+    
+    if len(volume_values) == 0:
+        return False, "No valid volume values"
+    
+    # Check for negative volume
+    if (volume_values < 0).any():
+        return False, "Volume contains negative values"
+    
+    # Check for infinite values
+    if np.isinf(volume_values).any():
+        return False, "Volume contains infinite values"
+    
+    # Check volume ratio if present
+    if 'volume_ratio' in df.columns:
+        ratios = df['volume_ratio'].dropna()
+        if len(ratios) > 0:
+            # Volume ratio should typically be < 10
+            if (ratios > 10).any():
+                return False, "Volume ratio unusually high (>10x)"
+            
+            if (ratios < 0).any():
+                return False, "Volume ratio contains negative values"
+    
+    # Check percentiles if present
+    if 'volume_percentile' in df.columns:
+        percentiles = df['volume_percentile'].dropna()
+        if len(percentiles) > 0:
+            if (percentiles < 0).any() or (percentiles > 100).any():
+                return False, "Volume percentile outside valid range [0, 100]"
+    
+    return True, "Volume validation passed"
 
 if __name__ == "__main__":
     main()

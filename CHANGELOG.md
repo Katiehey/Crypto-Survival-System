@@ -37,6 +37,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 17 comprehensive efficiency tests (all passing)
 - Combined feature validation script
 
+### Added
+- Volume moving average calculation
+- Volume ratio (current vs average)
+- Volume percentile tracking
+- Volume regime classification (low/normal/high/very_high)
+- Volume spike detection
+- 18 comprehensive volume tests (all passing)
+- Complete feature pipeline integration test
+
 ## [0.3.0] - 2026-01-07
 
 ### Added
