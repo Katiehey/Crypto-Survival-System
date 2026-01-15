@@ -55,7 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 9 integration tests for complete pipeline
 - Comprehensive feature documentation (docs/FEATURES.md)
 
-## [0.3.0] - 2026-01-07
+## [0.3.0] - 2026-01-13
 
 ### Added
 - Configuration system with immutable risk limits
@@ -69,7 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - API credentials loaded from environment only
 - No hardcoded secrets in code
 
-## [0.2.0] - 2026-01-07
+## [0.2.0] - 2026-01-14
 
 ### Added
 - Python environment setup with pinned dependencies
@@ -78,7 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Environment validation tests
 - Setup documentation
 
-## [0.1.0] - 2026-01-07
+## [0.1.0] - 2026-01-14
 
 ### Added
 - Initial repository structure
@@ -91,3 +91,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.0]: https://github.com/Katiehey/Crypto-Survival-System/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Katiehey/Crypto-Survival-System/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Katiehey/Crypto-Survival-System/releases/tag/v0.1.0
+
+### Planned for Day 3
+- Regime classifier (rule-based)
+- Regime confidence scoring
+- Regime visualization
+
+## [0.7.0] - 2026-01-15 - Day 2 Complete
+
+### Added
+- ATR (Average True Range) calculation with percentile tracking
+- Efficiency Ratio (Kaufman) for trend strength measurement
+- Volume metrics (MA, ratio, percentile, regime classification)
+- Volume spike detection
+- Unified feature calculation pipeline
+- Complete feature validation system
+- Feature summary statistics
+- CSV export functionality
+- 57+ comprehensive tests (all passing)
+- Feature documentation (FEATURES.md)
+- Day 2 summary document
+
+### Technical Details
+- 19 calculated features across 3 categories
+- Mathematical correctness validated with known values
+- Edge case handling (zeros, NaN, infinites)
+- Deterministic calculations (reproducible results)
+- Real data compatibility tested
+
+### Test Coverage
+- ATR tests: 13
+- Efficiency tests: 17
+- Volume tests: 18
+- Integration tests: 9
+- Total: 57+ tests, 100% passing
+
+## [0.6.0] - 2026-01-07 - Feature Pipeline Integration
+
+[Previous entries...]
+
+## [0.5.0] - 2026-01-15 - Day 1 Complete
