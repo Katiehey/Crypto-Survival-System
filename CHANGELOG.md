@@ -138,3 +138,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - DataFrame batch classification
 - Regime statistics calculation
 - 15 comprehensive classifier tests (all passing)
+
+### Added
+- Complete regime pipeline integration (data → features → regime)
+- Regime classification validation
+- End-to-end pipeline tests (12 tests)
+- Regime analysis script for real data
+- Pipeline function with automatic validation

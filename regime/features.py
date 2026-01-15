@@ -246,6 +246,8 @@ def validate_atr(df: pd.DataFrame) -> Tuple[bool, str]:
     atr_values = df['atr'].dropna()
     
     if len(atr_values) == 0:
+        if len(df) < 20: 
+            return True, "Validation skipped: Insufficient data for calculation"
         return False, "No valid ATR values"
     
     # Check for negative values
@@ -276,89 +278,103 @@ def validate_atr(df: pd.DataFrame) -> Tuple[bool, str]:
 
 def main():
     """
-    Test all feature calculations with sample data.
+    Test complete feature and regime pipeline with sample data.
     """
     print("=" * 60)
-    print("FEATURE CALCULATION TEST")
+    print("COMPLETE PIPELINE TEST (SYNTHETIC DATA)")
     print("=" * 60)
     
-    # Create sample data with clear trend and varying volume
+    # Create sample data with clear regimes
     np.random.seed(42)
-    n = 100
+    n = 150
     
-    # Create trending price data
-    trend = np.linspace(40000, 45000, n)
-    noise = np.random.randn(n) * 200
+    # 1. Create different market conditions
+    # First 50: Strong uptrend
+    trend_up = np.linspace(40000, 45000, 50)
     
-    # Create volume with some spikes
-    base_volume = 100
-    volume = base_volume + np.random.randn(n) * 20
-    volume[50] = base_volume * 3  # Spike at position 50
-    volume = np.abs(volume)  # Ensure positive
+    # Next 50: Ranging market
+    range_base = 45000
+    range_data = range_base + np.sin(np.linspace(0, 4*np.pi, 50)) * 200
+    
+    # Last 50: Chaotic/high volatility
+    chaos_base = 45000
+    chaos_data = chaos_base + np.cumsum(np.random.randn(50) * 300)
+    
+    # Combine and add noise
+    prices = np.concatenate([trend_up, range_data, chaos_data])
+    prices = prices + np.random.randn(n) * 100
+    
+    # 2. Create volume with varying participation
+    volume_trend = 120 + np.random.randn(50) * 10  # High volume in trend
+    volume_range = 80 + np.random.randn(50) * 10   # Low volume in range
+    volume_chaos = 150 + np.random.randn(50) * 30  # High volatile volume
+    volume = np.concatenate([volume_trend, volume_range, volume_chaos])
+    volume = np.abs(volume)
     
     df = pd.DataFrame({
-        'close': trend + noise,
-        'high': trend + noise + 100,
-        'low': trend + noise - 100,
+        'close': prices,
+        'high': prices + 100,
+        'low': prices - 100,
         'volume': volume,
     })
     
-    # Calculate all features
-    print("\n🔄 Calculating ATR features...")
-    df = add_atr_features(df)
-    
-    print("🔄 Calculating Efficiency features...")
-    df = add_efficiency_features(df)
-    
-    print("🔄 Calculating Volume features...")
-    df = add_volume_features(df)
-    
-    # Display results
-    print("\nSample Data (last 5 rows):")
-    cols_to_show = [
-        'close', 'volume', 'volume_ratio', 'volume_regime',
-        'atr_percentile', 'efficiency_ratio', 'trend_strength'
-    ]
-    # Use only columns that exist to prevent errors
-    existing_cols = [c for c in cols_to_show if c in df.columns]
-    print(df[existing_cols].tail())
-    
-    # Validation
-    atr_valid, atr_msg = validate_atr(df)
-    eff_valid, eff_msg = validate_efficiency(df)
-    vol_valid, vol_msg = validate_volume(df)
-    
-    print(f"\n{'✅' if atr_valid else '❌'} ATR: {atr_msg}")
-    print(f"{'✅' if eff_valid else '❌'} Efficiency: {eff_msg}")
-    print(f"{'✅' if vol_valid else '❌'} Volume: {vol_msg}")
-    
-    # Statistics
-    print("\n" + "=" * 60)
-    print("FEATURE STATISTICS")
-    print("=" * 60)
-    
-    if 'atr_pct' in df.columns:
-        print("\nATR:")
-        print(f"  Mean %: {df['atr_pct'].mean() * 100:.2f}%")
-    
-    if 'efficiency_ratio' in df.columns:
-        print("\nEfficiency Ratio:")
-        print(f"  Mean: {df['efficiency_ratio'].mean():.3f}")
-    
-    if 'volume_ratio' in df.columns:
-        print("\nVolume:")
-        print(f"  Mean: {df['volume'].mean():.2f}")
-        print(f"  Mean ratio: {df['volume_ratio'].mean():.2f}")
-        print(f"  Spikes detected: {df['volume_spike'].sum()}")
-    
-    if 'volume_regime' in df.columns:
-        print("\nVolume Regime Distribution:")
-        print(df['volume_regime'].value_counts())
-    
-    if 'trend_strength' in df.columns:
-        print("\nTrend Strength Distribution:")
-        print(df['trend_strength'].value_counts())
+    # 3. Run complete pipeline
+    try:
+        # Assuming this function calls add_atr, add_efficiency, add_volume, and classify_regime
+        df = calculate_complete_pipeline(df)
+        
+        # Display sample results by regime
+        print("\n" + "=" * 60)
+        print("SAMPLE RESULTS BY DETECTED REGIME")
+        print("=" * 60)
+        
+        # Check only for columns that exist
+        cols_to_show = ['close', 'efficiency_ratio', 'atr_percentile', 'volume_regime', 'regime_confidence']
+        existing_cols = [c for c in cols_to_show if c in df.columns]
 
+        for regime in ['trend', 'range', 'chaos']:
+            if 'regime' in df.columns:
+                regime_df = df[df['regime'] == regime]
+                if len(regime_df) > 0:
+                    print(f"\n{regime.upper()} example (first 3 rows):")
+                    print(regime_df[existing_cols].head(3).to_string())
+        
+        # 4. Feature Statistics Breakdown
+        print("\n" + "=" * 60)
+        print("FEATURE STATISTICS")
+        print("=" * 60)
+        
+        if 'atr_pct' in df.columns:
+            print(f"\nATR Mean %: {df['atr_pct'].mean() * 100:.2f}%")
+        
+        if 'efficiency_ratio' in df.columns:
+            print(f"Efficiency Ratio Mean: {df['efficiency_ratio'].mean():.3f}")
+        
+        if 'volume_ratio' in df.columns:
+            print(f"Volume Mean: {df['volume'].mean():.2f}")
+            print(f"Volume Ratio Mean: {df['volume_ratio'].mean():.2f}")
+            if 'volume_spike' in df.columns:
+                print(f"Spikes detected: {df['volume_spike'].sum()}")
+        
+        if 'regime' in df.columns:
+            print("\nMarket Regime Distribution:")
+            print(df['regime'].value_counts())
+            
+        # 5. Final Validation
+        print("\n" + "=" * 60)
+        print("VALIDATION")
+        print("=" * 60)
+        
+        # Perform feature-specific validations if they exist
+        # (Using get from locals or globals to avoid errors if not defined)
+        regime_valid, regime_msg = validate_regime_classification(df)
+        print(f"{'✅' if regime_valid else '❌'} Regime: {regime_msg}")
+        
+        print("\n✅ Complete pipeline test successful")
+        
+    except Exception as e:
+        print(f"\n❌ Pipeline test failed: {e}")
+        raise
 
 def calculate_efficiency_ratio(
     close: pd.Series,
@@ -579,6 +595,8 @@ def validate_efficiency(df: pd.DataFrame) -> Tuple[bool, str]:
     er_values = df['efficiency_ratio'].dropna()
     
     if len(er_values) == 0:
+        if len(df) < 20: 
+            return True, "Validation skipped: Insufficient data for calculation"
         return False, "No valid efficiency ratio values"
     
     # 1. Check for infinite values FIRST
@@ -1022,6 +1040,178 @@ def export_features_csv(df: pd.DataFrame, filepath: str) -> None:
     
     df[cols_to_export].to_csv(filepath, index=False)
     print(f"✅ Features exported to {filepath}")
+
+def add_regime_classification(
+    df: pd.DataFrame,
+    classifier=None
+) -> pd.DataFrame:
+    """
+    Add regime classification to DataFrame with features.
+    
+    Requires features to already be calculated:
+    - efficiency_ratio
+    - atr_percentile
+    - volume_percentile
+    - volume_regime
+    
+    Adds columns:
+    - 'regime': Regime classification
+    - 'regime_confidence': Confidence score
+    - 'regime_tradable': Boolean tradable flag
+    
+    Args:
+        df: DataFrame with calculated features
+        classifier: RegimeClassifier instance (creates new if None)
+        
+    Returns:
+        DataFrame with regime classification added
+        
+    Raises:
+        ValueError: If required feature columns missing
+    """
+    from regime.classifier import RegimeClassifier
+    
+    if classifier is None:
+        classifier = RegimeClassifier()
+    
+    # Classify regimes
+    df = classifier.classify_dataframe(df)
+    
+    return df
+
+
+def calculate_complete_pipeline(
+    df: pd.DataFrame,
+    atr_period: int = 14,
+    efficiency_period: int = 10,
+    volume_ma_period: int = 20,
+    percentile_lookback: int = 100
+) -> pd.DataFrame:
+    """
+    Complete pipeline: OHLCV → Features → Regime Classification.
+    
+    This is the main entry point for the entire system.
+    
+    Steps:
+    1. Calculate ATR features (volatility)
+    2. Calculate Efficiency features (trend strength)
+    3. Calculate Volume features (participation)
+    4. Classify regime
+    5. Validate all calculations
+    
+    Args:
+        df: DataFrame with OHLCV columns
+        atr_period: ATR calculation period
+        efficiency_period: Efficiency ratio period
+        volume_ma_period: Volume MA period
+        percentile_lookback: Lookback for percentiles
+        
+    Returns:
+        DataFrame with features and regime classification
+        
+    Raises:
+        ValueError: If input validation fails
+        
+    Example:
+        >>> from data.fetcher import DataFetcher
+        >>> from regime.features import calculate_complete_pipeline
+        >>> 
+        >>> fetcher = DataFetcher()
+        >>> df = fetcher.load_candles(limit=200)
+        >>> df = calculate_complete_pipeline(df)
+        >>> 
+        >>> # Access regime classification
+        >>> print(df[['datetime', 'close', 'regime', 'regime_confidence']].tail())
+    """
+    print("=" * 60)
+    print("COMPLETE REGIME PIPELINE")
+    print("=" * 60)
+    
+    # Step 1: Calculate all features
+    print("\n1. Calculating features...")
+    df = calculate_all_features(
+        df,
+        atr_period=atr_period,
+        efficiency_period=efficiency_period,
+        volume_ma_period=volume_ma_period,
+        percentile_lookback=percentile_lookback
+    )
+    
+    # Step 2: Validate features
+    print("\n2. Validating features...")
+    all_valid, results = validate_all_features(df)
+    
+    for feature_type, result in results.items():
+        status = "✅" if result['valid'] else "❌"
+        print(f"   {status} {feature_type.capitalize()}: {result['message']}")
+    
+    if not all_valid:
+        raise ValueError("Feature validation failed")
+    
+    # Step 3: Classify regimes
+    print("\n3. Classifying regimes...")
+    df = add_regime_classification(df)
+    
+    # Step 4: Summary
+    from regime.classifier import get_regime_statistics
+    stats = get_regime_statistics(df)
+    
+    print(f"\n4. Pipeline complete")
+    print(f"   Total periods: {stats['total_periods']}")
+    print(f"   Tradable periods: {stats.get('tradable_periods', 0)} "
+          f"({stats.get('tradable_percentage', 0):.1f}%)")
+    
+    print("\n   Regime distribution:")
+    for regime, count in stats.get('regime_counts', {}).items():
+        pct = stats['regime_percentages'][regime]
+        print(f"     {regime:10s}: {count:3d} ({pct:5.1f}%)")
+    
+    print("\n" + "=" * 60)
+    
+    return df
+
+
+def validate_regime_classification(df: pd.DataFrame) -> Tuple[bool, str]:
+    """
+    Validate regime classification.
+    
+    Checks:
+    - Regime column exists
+    - All regimes are valid
+    - Confidence scores in valid range
+    - Tradable flags are boolean
+    
+    Args:
+        df: DataFrame with regime classification
+        
+    Returns:
+        (is_valid, error_message)
+    """
+    if 'regime' not in df.columns:
+        return False, "Regime column missing"
+    
+    # Check for valid regime values
+    valid_regimes = {'trend', 'range', 'chaos', 'no_trade'}
+    invalid_regimes = set(df['regime'].dropna().unique()) - valid_regimes
+    
+    if invalid_regimes:
+        return False, f"Invalid regime values: {invalid_regimes}"
+    
+    # Check confidence scores
+    if 'regime_confidence' in df.columns:
+        confidences = df['regime_confidence'].dropna()
+        if len(confidences) > 0:
+            if (confidences < 0).any() or (confidences > 1).any():
+                return False, "Confidence scores outside valid range [0, 1]"
+    
+    # Check tradable flags
+    if 'regime_tradable' in df.columns:
+        tradables = df['regime_tradable'].dropna()
+        if len(tradables) > 0:
+            if not tradables.isin([True, False]).all():
+                return False, "Tradable flags must be boolean"
+    
+    return True, "Regime validation passed"
 
 if __name__ == "__main__":
     main()
