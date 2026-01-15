@@ -126,8 +126,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Integration tests: 9
 - Total: 57+ tests, 100% passing
 
-## [0.6.0] - 2026-01-07 - Feature Pipeline Integration
-
-[Previous entries...]
+## [0.6.0] - 2026-01-15 - Feature Pipeline Integration
 
 ## [0.5.0] - 2026-01-15 - Day 1 Complete
+
+### Added
+- Regime classifier with 4 regime types (TREND, RANGE, CHAOS, NO_TRADE)
+- Rule-based classification logic using feature thresholds
+- Confidence scoring for regime classifications
+- Tradability flag for each regime
+- DataFrame batch classification
+- Regime statistics calculation
+- 15 comprehensive classifier tests (all passing)
