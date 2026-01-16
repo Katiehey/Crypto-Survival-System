@@ -1,16 +1,8 @@
 """
-Market regime classifier.
+Market regime classifier with Hysteresis (State Memory).
 
-Classifies market conditions based on calculated features:
-- ATR (volatility)
-- Efficiency Ratio (trend strength)
-- Volume (participation)
-
-Outputs one of four regimes:
-- TREND: Strong directional movement
-- RANGE: Sideways consolidation
-- CHAOS: High volatility without direction
-- NO_TRADE: Unclear or dangerous conditions
+Classifies market conditions based on ATR, Efficiency Ratio, and Volume.
+Uses 'sticky' thresholds to prevent rapid regime flipping.
 """
 
 from enum import Enum
@@ -30,15 +22,7 @@ class Regime(Enum):
 
 @dataclass
 class RegimeClassification:
-    """
-    Result of regime classification.
-    
-    Attributes:
-        regime: Classified regime type
-        confidence: Confidence score (0-1)
-        tradable: Whether regime is tradable
-        reasons: List of reasons for classification
-    """
+    """Result of regime classification."""
     regime: Regime
     confidence: float
     tradable: bool
@@ -51,25 +35,26 @@ class RegimeClassification:
 
 class RegimeClassifier:
     """
-    Rule-based market regime classifier.
-    
-    Uses technical indicators to classify market into one of four regimes.
+    Rule-based market regime classifier with State Memory.
     """
     
-    # Classification thresholds
-    EFFICIENCY_TREND_THRESHOLD = 0.6      # ER >= 0.6 = strong trend
-    EFFICIENCY_RANGE_THRESHOLD = 0.35     # ER < 0.35 = no trend
+    # --- HYSTERESIS THRESHOLDS (The "Sticky" Logic) ---
+    # TREND: Need 0.65 to start, but only 0.50 to stay in it.
+    ER_TREND_ENTRY = 0.65      
+    ER_TREND_HOLD  = 0.50      
     
-    ATR_HIGH_PERCENTILE = 60              # ATR > 60th %ile = high volatility
-    ATR_LOW_PERCENTILE = 40               # ATR < 40th %ile = low volatility
+    # RANGE: Need < 0.30 to enter, but stays range up to 0.40.
+    ER_RANGE_ENTRY = 0.30     
+    ER_RANGE_HOLD  = 0.40     
     
-    VOLUME_LOW_PERCENTILE = 20            # Volume < 20th %ile = very low
-    
-    MIN_CONFIDENCE_TRADABLE = 0.4         # Below this = NO_TRADE
-    
+    ATR_HIGH_PERCENTILE = 60              
+    ATR_LOW_PERCENTILE = 40               
+    VOLUME_LOW_PERCENTILE = 20            
+    MIN_CONFIDENCE_TRADABLE = 0.4         
+
     def __init__(self):
-        """Initialize regime classifier."""
-        pass
+        """Initialize with memory of the last regime."""
+        self.last_regime = Regime.NO_TRADE
     
     def classify_regime(
         self,
@@ -78,216 +63,87 @@ class RegimeClassifier:
         volume_percentile: float,
         volume_regime: str
     ) -> RegimeClassification:
-        """
-        Classify market regime based on features.
-        
-        Args:
-            efficiency_ratio: Efficiency ratio (0-1)
-            atr_percentile: ATR percentile (0-100)
-            volume_percentile: Volume percentile (0-100)
-            volume_regime: Volume regime classification
-            
-        Returns:
-            RegimeClassification with regime, confidence, and reasons
-        """
+        """Classify market regime using state memory."""
         reasons = []
         
-        # Check for invalid data first
+        # 1. Check for invalid data
         if self._has_invalid_data(efficiency_ratio, atr_percentile, volume_percentile):
-            return RegimeClassification(
-                regime=Regime.NO_TRADE,
-                confidence=0.0,
-                tradable=False,
-                reasons=["Invalid or missing data"]
-            )
+            self.last_regime = Regime.NO_TRADE
+            return RegimeClassification(Regime.NO_TRADE, 0.0, False, ["Invalid data"])
         
-        # Check for very low volume (usually avoid)
+        # 2. Volume Filter (Survival Rule)
         if volume_percentile < self.VOLUME_LOW_PERCENTILE:
-            reasons.append(f"Very low volume ({volume_percentile:.1f}th percentile)")
-            return RegimeClassification(
-                regime=Regime.NO_TRADE,
-                confidence=0.3,
-                tradable=False,
-                reasons=reasons
-            )
-        
-        # Classify based on feature combinations
-        
-        # TREND: Strong efficiency + decent volume
-        if efficiency_ratio >= self.EFFICIENCY_TREND_THRESHOLD:
-            reasons.append(f"Strong trend (ER={efficiency_ratio:.2f})")
-            
-            # Higher confidence with normal/high volume
-            if volume_regime in ['normal', 'high', 'very_high']:
-                reasons.append(f"Good volume participation ({volume_regime})")
-                confidence = 0.8 + (efficiency_ratio - self.EFFICIENCY_TREND_THRESHOLD) * 0.5
-            else:
-                reasons.append(f"Low volume ({volume_regime})")
-                confidence = 0.6
-            
-            confidence = min(confidence, 1.0)
-            
-            return RegimeClassification(
-                regime=Regime.TREND,
-                confidence=confidence,
-                tradable=True,
-                reasons=reasons
-            )
-        
-        # RANGE: Low efficiency + low volatility
-        if (efficiency_ratio < self.EFFICIENCY_RANGE_THRESHOLD and
-            atr_percentile < self.ATR_LOW_PERCENTILE):
-            reasons.append(f"Low trend strength (ER={efficiency_ratio:.2f})")
-            reasons.append(f"Low volatility (ATR {atr_percentile:.1f}th percentile)")
-            
-            # Confidence based on how stable the range is
-            confidence = 0.5 + (self.EFFICIENCY_RANGE_THRESHOLD - efficiency_ratio) * 0.5
-            confidence = min(confidence, 0.8)
-            
-            return RegimeClassification(
-                regime=Regime.RANGE,
-                confidence=confidence,
-                tradable=True,  # Ranges can be traded with appropriate strategy
-                reasons=reasons
-            )
-        
-        # CHAOS: Low efficiency + high volatility
-        if (efficiency_ratio < self.EFFICIENCY_RANGE_THRESHOLD and
-            atr_percentile >= self.ATR_HIGH_PERCENTILE):
-            reasons.append(f"No directional movement (ER={efficiency_ratio:.2f})")
-            reasons.append(f"High volatility (ATR {atr_percentile:.1f}th percentile)")
-            
-            # Higher volatility = lower confidence (more dangerous)
-            confidence = 0.7 - (atr_percentile - self.ATR_HIGH_PERCENTILE) / 100
-            confidence = max(confidence, 0.3)
-            
-            return RegimeClassification(
-                regime=Regime.CHAOS,
-                confidence=confidence,
-                tradable=False,  # Chaotic markets are dangerous
-                reasons=reasons
-            )
-        
-        # MODERATE CONDITIONS: Efficiency between thresholds
-        # This is an ambiguous zone
-        if (self.EFFICIENCY_RANGE_THRESHOLD <= efficiency_ratio < self.EFFICIENCY_TREND_THRESHOLD):
-            reasons.append(f"Moderate trend strength (ER={efficiency_ratio:.2f})")
-            reasons.append("Ambiguous market conditions")
-            
-            # Lean towards TREND if higher efficiency, RANGE if lower
-            if efficiency_ratio >= 0.5:
-                regime = Regime.TREND
-                confidence = 0.5
-            else:
-                regime = Regime.RANGE
-                confidence = 0.4
-            
-            # Low confidence in ambiguous conditions
-            return RegimeClassification(
-                regime=regime,
-                confidence=confidence,
-                tradable=(confidence >= self.MIN_CONFIDENCE_TRADABLE),
-                reasons=reasons
-            )
-        
-        # FALLBACK: If we get here, conditions are unclear
-        reasons.append("Unclear market conditions")
-        return RegimeClassification(
-            regime=Regime.NO_TRADE,
-            confidence=0.2,
-            tradable=False,
-            reasons=reasons
-        )
-    
-    def _has_invalid_data(
-        self,
-        efficiency_ratio: float,
-        atr_percentile: float,
-        volume_percentile: float
-    ) -> bool:
-        """
-        Check if any input data is invalid.
-        
-        Args:
-            efficiency_ratio: Efficiency ratio
-            atr_percentile: ATR percentile
-            volume_percentile: Volume percentile
-            
-        Returns:
-            True if any data is invalid
-        """
-        # Check for NaN
-        if pd.isna(efficiency_ratio) or pd.isna(atr_percentile) or pd.isna(volume_percentile):
-            return True
-        
-        # Check for infinite
-        if np.isinf(efficiency_ratio) or np.isinf(atr_percentile) or np.isinf(volume_percentile):
-            return True
-        
-        # Check for out-of-range values
-        if efficiency_ratio < 0 or efficiency_ratio > 1:
-            return True
-        
-        if atr_percentile < 0 or atr_percentile > 100:
-            return True
-        
-        if volume_percentile < 0 or volume_percentile > 100:
-            return True
-        
-        return False
-    
-    def classify_dataframe(
-        self,
-        df: pd.DataFrame
-    ) -> pd.DataFrame:
-        """
-        Classify regime for entire DataFrame.
-        
-        Adds columns:
-        - 'regime': Regime classification
-        - 'regime_confidence': Confidence score
-        - 'regime_tradable': Boolean tradable flag
-        
-        Args:
-            df: DataFrame with feature columns
-            
-        Returns:
-            DataFrame with regime classification columns added
-            
-        Raises:
-            ValueError: If required columns missing
-        """
+            reasons.append(f"Low volume ({volume_percentile:.1f}%)")
+            self.last_regime = Regime.NO_TRADE
+            return RegimeClassification(Regime.NO_TRADE, 0.3, False, reasons)
+
+        # 3. Determine TREND state
+        # If we were already in a trend, use the lower 'HOLD' threshold
+        if self.last_regime == Regime.TREND:
+            is_trend = efficiency_ratio >= self.ER_TREND_HOLD
+            reasons.append(f"Holding Trend (ER={efficiency_ratio:.2f})")
+        else:
+            is_trend = efficiency_ratio >= self.ER_TREND_ENTRY
+            if is_trend: reasons.append(f"Entered Trend (ER={efficiency_ratio:.2f})")
+
+        if is_trend:
+            self.last_regime = Regime.TREND
+            conf = min(0.6 + (efficiency_ratio * 0.4), 1.0)
+            return RegimeClassification(Regime.TREND, conf, True, reasons)
+
+        # 4. Determine RANGE state
+        if self.last_regime == Regime.RANGE:
+            is_range = (efficiency_ratio < self.ER_RANGE_HOLD and atr_percentile < self.ATR_LOW_PERCENTILE)
+            reasons.append("Holding Range")
+        else:
+            is_range = (efficiency_ratio < self.ER_RANGE_ENTRY and atr_percentile < self.ATR_LOW_PERCENTILE)
+            if is_range: reasons.append("Entered Range")
+
+        if is_range:
+            self.last_regime = Regime.RANGE
+            return RegimeClassification(Regime.RANGE, 0.6, True, reasons)
+
+        # 5. Determine CHAOS state
+        if efficiency_ratio < self.ER_RANGE_HOLD and atr_percentile >= self.ATR_HIGH_PERCENTILE:
+            reasons.append("High volatility/Low efficiency")
+            self.last_regime = Regime.CHAOS
+            return RegimeClassification(Regime.CHAOS, 0.5, False, reasons)
+
+        # 6. Fallback to NO_TRADE
+        reasons.append("Ambiguous conditions")
+        self.last_regime = Regime.NO_TRADE
+        return RegimeClassification(Regime.NO_TRADE, 0.2, False, reasons)
+
+    def classify_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Classify entire dataframe sequentially to maintain memory."""
         required_cols = ['efficiency_ratio', 'atr_percentile', 'volume_percentile', 'volume_regime']
-        missing = [col for col in required_cols if col not in df.columns]
-        if missing:
-            raise ValueError(f"Missing required columns: {missing}")
+        if not all(col in df.columns for col in required_cols):
+            raise ValueError(f"Missing columns: {required_cols}")
         
         df = df.copy()
+        regimes, confidences, tradables = [], [], []
         
-        # Initialize result columns
-        regimes = []
-        confidences = []
-        tradables = []
-        
-        # Classify each row
-        for idx, row in df.iterrows():
-            classification = self.classify_regime(
-                efficiency_ratio=row['efficiency_ratio'],
-                atr_percentile=row['atr_percentile'],
-                volume_percentile=row['volume_percentile'],
-                volume_regime=row['volume_regime']
+        # IMPORTANT: Reset memory before processing a new batch of history
+        self.last_regime = Regime.NO_TRADE
+
+        for _, row in df.iterrows():
+            res = self.classify_regime(
+                row['efficiency_ratio'], row['atr_percentile'], 
+                row['volume_percentile'], row['volume_regime']
             )
-            
-            regimes.append(classification.regime.value)
-            confidences.append(classification.confidence)
-            tradables.append(classification.tradable)
+            regimes.append(res.regime.value)
+            confidences.append(res.confidence)
+            tradables.append(res.tradable)
         
-        # Add to DataFrame
         df['regime'] = regimes
         df['regime_confidence'] = confidences
         df['regime_tradable'] = tradables
-        
         return df
+
+    def _has_invalid_data(self, er, atr, vol) -> bool:
+        return any(pd.isna([er, atr, vol])) or any(np.isinf([er, atr, vol]))
+
+# Keep the existing get_regime_statistics and main() functions below...
 
 
 def get_regime_statistics(df: pd.DataFrame) -> dict:

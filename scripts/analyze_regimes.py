@@ -124,6 +124,29 @@ def main():
     print("✅ Regime analysis complete")
     print("=" * 60)
     
+    # Regime sequence analysis
+    print("\n" + "=" * 60)
+    print("REGIME SEQUENCE ANALYSIS")
+    print("=" * 60)
+    
+    from regime.visualization import (
+        analyze_regime_sequence,
+        print_regime_analysis,
+        create_regime_timeline_text
+    )
+    
+    analysis = analyze_regime_sequence(df)
+    print_regime_analysis(analysis)
+    
+    # Timeline visualization
+    print("\n" + "=" * 60)
+    print("REGIME TIMELINE (most recent 60 periods)")
+    print("=" * 60)
+    
+    recent_df = df.tail(60)
+    timeline = create_regime_timeline_text(recent_df)
+    print(timeline)
+
     return 0
 
 

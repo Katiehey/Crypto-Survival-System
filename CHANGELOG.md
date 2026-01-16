@@ -145,3 +145,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - End-to-end pipeline tests (12 tests)
 - Regime analysis script for real data
 - Pipeline function with automatic validation
+
+### Added
+- Regime transition detection and analysis
+- Regime duration statistics
+- Regime transition matrix (probability matrix)
+- Regime persistence calculation
+- Text-based regime timeline visualization
+- Complete regime sequence analysis
+- 13 visualization tests (all passing)
+- Regime classification documentation
