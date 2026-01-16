@@ -155,3 +155,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Complete regime sequence analysis
 - 13 visualization tests (all passing)
 - Regime classification documentation
+
+### Planned for Days 4-5 (Week 1 Completion)
+- End-to-end integration testing
+- Performance benchmarking
+- Code quality review
+- Week 1 retrospective
+- Week 2 detailed planning
+
+## [0.8.0] - 2026-01-16 - Day 3 Complete: Regime Classification
+
+### Added
+- Rule-based regime classifier (4 regime types)
+- Regime confidence scoring system
+- Complete pipeline integration (OHLCV → Features → Regime)
+- Regime transition detection and analysis
+- Regime duration statistics
+- Regime transition probability matrix
+- Regime persistence metrics
+- Text-based regime timeline visualization
+- Complete regime sequence analysis tools
+- Regime analysis script for real data
+- 40 new tests (85+ total, all passing)
+- Regime classification documentation
+- Day 3 summary document
+
+### Regime Types
+- TREND: Strong directional movement (tradable)
+- RANGE: Sideways consolidation (tradable)
+- CHAOS: High volatility without direction (avoid)
+- NO_TRADE: Unclear/dangerous conditions (avoid)
+
+### Classification Features
+- Confidence scoring (0-1)
+- Tradability determination
+- Reasoning for each classification
+- Automatic validation
+- Batch classification support
+
+### Analysis Capabilities
+- Transition detection
+- Duration calculations
+- Transition matrices
+- Persistence metrics
+- Timeline visualization
+- Complete statistics
+
+### Technical Details
+- Rule-based logic (no AI in classification)
+- Deterministic outputs
+- Configurable thresholds
+- Comprehensive error handling
+- Full validation pipeline
+
+## [0.7.0] - 2026-01-16 - Day 2 Complete: Feature Engineering

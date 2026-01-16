@@ -118,7 +118,7 @@ class RegimeClassifier:
         """Classify entire dataframe sequentially to maintain memory."""
         required_cols = ['efficiency_ratio', 'atr_percentile', 'volume_percentile', 'volume_regime']
         if not all(col in df.columns for col in required_cols):
-            raise ValueError(f"Missing columns: {required_cols}")
+            raise ValueError(f"Missing required columns: {required_cols}")
         
         df = df.copy()
         regimes, confidences, tradables = [], [], []
@@ -141,9 +141,14 @@ class RegimeClassifier:
         return df
 
     def _has_invalid_data(self, er, atr, vol) -> bool:
-        return any(pd.isna([er, atr, vol])) or any(np.isinf([er, atr, vol]))
-
-# Keep the existing get_regime_statistics and main() functions below...
+        if any(pd.isna([er, atr, vol])) or any(np.isinf([er, atr, vol])):
+            return True
+    
+        # NEW: Check for logical range violations (ER must be between 0 and 1)
+        if er < 0 or er > 1:
+            return True
+        
+        return False
 
 
 def get_regime_statistics(df: pd.DataFrame) -> dict:
