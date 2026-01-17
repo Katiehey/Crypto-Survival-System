@@ -278,7 +278,10 @@ def validate_atr(df: pd.DataFrame) -> Tuple[bool, str]:
 
 def main():
     """
-    Test complete feature and regime pipeline with sample data.
+    Execute a demonstration of the feature engineering pipeline using synthetic data.
+    
+    Generates three distinct market phases (trend, range, chaos) and 
+    verifies that ATR, Efficiency, and Volume metrics are calculated correctly.
     """
     print("=" * 60)
     print("COMPLETE PIPELINE TEST (SYNTHETIC DATA)")
@@ -513,6 +516,7 @@ def classify_trend_strength(efficiency: pd.Series) -> pd.Series:
         Series of trend strength labels
     """
     def classify(er):
+        """Map efficiency ratio value to trend strength label."""
         if pd.isna(er):
             return 'unknown'
         elif er >= 0.7:
@@ -724,6 +728,7 @@ def classify_volume_regime(volume_ratio: pd.Series) -> pd.Series:
         Series of volume regime labels
     """
     def classify(ratio):
+        """Map volume ratio value to volume regime label."""
         if pd.isna(ratio):
             return 'unknown'
         elif ratio >= 2.0:
@@ -1088,40 +1093,21 @@ def calculate_complete_pipeline(
     percentile_lookback: int = 100
 ) -> pd.DataFrame:
     """
-    Complete pipeline: OHLCV → Features → Regime Classification.
+    Run the full transformation from raw OHLCV data to regime classification.
     
-    This is the main entry point for the entire system.
-    
-    Steps:
-    1. Calculate ATR features (volatility)
-    2. Calculate Efficiency features (trend strength)
-    3. Calculate Volume features (participation)
-    4. Classify regime
-    5. Validate all calculations
+    This function chains together the calculation of volatility (ATR), 
+    trend efficiency (Kaufman ER), and volume metrics, followed by 
+    the final regime classification.
     
     Args:
-        df: DataFrame with OHLCV columns
-        atr_period: ATR calculation period
-        efficiency_period: Efficiency ratio period
-        volume_ma_period: Volume MA period
-        percentile_lookback: Lookback for percentiles
+        df: DataFrame with high, low, close, volume columns.
+        atr_period: Period for ATR calculation.
+        efficiency_period: Period for efficiency ratio.
+        volume_ma_period: Period for volume moving average.
+        percentile_lookback: Window for rolling percentile features.
         
     Returns:
-        DataFrame with features and regime classification
-        
-    Raises:
-        ValueError: If input validation fails
-        
-    Example:
-        >>> from data.fetcher import DataFetcher
-        >>> from regime.features import calculate_complete_pipeline
-        >>> 
-        >>> fetcher = DataFetcher()
-        >>> df = fetcher.load_candles(limit=200)
-        >>> df = calculate_complete_pipeline(df)
-        >>> 
-        >>> # Access regime classification
-        >>> print(df[['datetime', 'close', 'regime', 'regime_confidence']].tail())
+        pd.DataFrame: Original data with all features and regime labels.
     """
     print("=" * 60)
     print("COMPLETE REGIME PIPELINE")

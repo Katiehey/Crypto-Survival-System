@@ -2,6 +2,49 @@
 
 **A private, AI-assisted trading system focused on capital preservation, controlled experimentation, and quiet compounding.**
 
+**Current Status**: ✅ Week 1 Complete - Foundation Ready  
+**Version**: v1.0 (Week 1)  
+**Last Updated**: 2026-01-07
+
+---
+
+## ⚡ Quick Start
+```bash
+# Clone repository
+git clone https://github.com/yourusername/crypto-survival-system.git
+cd crypto-survival-system
+
+# Setup environment
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Initialize database
+python scripts/setup_db.py
+
+# Run system health check
+python scripts/system_health_check.py
+
+# Run tests
+pytest tests/ regime/tests/ -v
+```
+
+---
+
+## 🎯 What This System Can Do (Week 1)
+
+✅ **Fetch and store market data** from Binance  
+✅ **Calculate 19 technical features** (ATR, Efficiency, Volume)  
+✅ **Classify market regimes** (TREND, RANGE, CHAOS, NO_TRADE)  
+✅ **Analyze regime transitions** and patterns  
+✅ **Export complete analysis** to CSV  
+
+❌ **Cannot trade yet** - Need risk engine (Week 2)  
+❌ **Cannot backtest yet** - Need backtesting framework (Week 3)  
+❌ **Cannot paper trade yet** - Need execution simulation (Week 4)
+
+---
+
 This repository exists to support **personal trading of my own funds only**.  
 It is designed to survive market uncertainty, not to chase performance.
 

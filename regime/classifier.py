@@ -29,6 +29,7 @@ class RegimeClassification:
     reasons: list[str]
     
     def __repr__(self):
+        """Return a string representation of the classification."""
         return (f"RegimeClassification(regime={self.regime.value}, "
                 f"confidence={self.confidence:.2f}, tradable={self.tradable})")
 
@@ -141,6 +142,15 @@ class RegimeClassifier:
         return df
 
     def _has_invalid_data(self, er, atr, vol) -> bool:
+        """
+        Validate input metrics for NaN, infinity, or logical range violations.
+        
+        Checks if any input is non-numeric or if the Efficiency Ratio (ER) 
+        falls outside the required [0, 1] bounds.
+        
+        Returns:
+            bool: True if data is invalid and classification should be skipped.
+        """
         if any(pd.isna([er, atr, vol])) or any(np.isinf([er, atr, vol])):
             return True
     
@@ -182,7 +192,12 @@ def get_regime_statistics(df: pd.DataFrame) -> dict:
 
 
 def main():
-    """Test regime classifier with synthetic data."""
+    """
+    Run diagnostic tests on the RegimeClassifier using predefined market scenarios.
+    
+    Tests the logic for Trend, Range, Chaos, and Low Volume states, 
+    verifying that the Hysteresis and Volume filters trigger correctly.
+    """
     print("=" * 60)
     print("REGIME CLASSIFIER TEST")
     print("=" * 60)

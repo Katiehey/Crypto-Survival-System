@@ -20,6 +20,12 @@ class ExchangeConfig:
     """
     
     def __init__(self):
+        """
+        Initialize ExchangeConfig by loading credentials from environment variables.
+        
+        Performs basic validation to ensure keys are not the default placeholder 
+        strings and sets internal state for testnet usage.
+        """
         self.api_key: Optional[str] = os.getenv('BINANCE_API_KEY')
         self.api_secret: Optional[str] = os.getenv('BINANCE_API_SECRET')
         self.use_testnet: bool = os.getenv('BINANCE_TESTNET', 'true').lower() == 'true'
