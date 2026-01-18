@@ -230,3 +230,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Memory usage: ~12MB (8x less than limit)
 - Near-linear scaling (O(n) complexity)
 - No optimization required
+
+### Added - Week 2, Day 6
+- Risk engine foundation (position sizing)
+- Fixed fractional position sizing calculation
+- Position size validation logic
+- 13 position sizing tests (all passing)
+- Mathematical verification of calculations

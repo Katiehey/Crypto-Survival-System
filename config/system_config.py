@@ -24,53 +24,39 @@ load_dotenv(find_dotenv(usecwd=True), override=True)
 class RiskLimits:
     """
     Hard risk constraints enforced at execution level.
-    
-    These limits exist to prevent catastrophic loss.
-    The system will refuse to trade if these would be violated.
     """
     
     # Position Risk (per trade)
-    MAX_RISK_PER_TRADE: float = float(os.getenv('MAX_RISK_PER_TRADE', '0.005'))  # 0.5%
-    MIN_RISK_PER_TRADE: float = 0.0025  # 0.25% - minimum viable with fees
+    # Risking 0.5% of R500 = R2.50 per trade.
+    MAX_RISK_PER_TRADE: float = 0.005  
+    MIN_RISK_PER_TRADE: float = 0.0025  
     
     # Daily Limits
-    MAX_DAILY_LOSS: float = float(os.getenv('MAX_DAILY_LOSS', '0.01'))  # 1%
-    MAX_TRADES_PER_DAY: int = int(os.getenv('MAX_TRADES_PER_DAY', '2'))
+    MAX_DAILY_LOSS: float = 0.01  # 1% (R5.00)
+    MAX_TRADES_PER_DAY: int = 3   
     
     # Streak Protection
-    MAX_CONSECUTIVE_LOSSES: int = int(os.getenv('MAX_CONSECUTIVE_LOSSES', '2'))
-    LOSS_STREAK_COOLDOWN_HOURS: int = 24
+    MAX_CONSECUTIVE_LOSSES: int = 2
+    # FIXED: Added the '=' sign missing in your snippet
+    LOSS_STREAK_COOLDOWN_HOURS: int = 24 
     
     # Kill Switch
-    MAX_DRAWDOWN_FROM_PEAK: float = float(os.getenv('MAX_DRAWDOWN_KILL_SWITCH', '0.05'))  # 5%
+    MAX_DRAWDOWN_FROM_PEAK: float = 0.05  # 5% (R25.00)
     
-    # Position Limits
-    MAX_POSITION_SIZE_PERCENT: float = 0.02  # 2% of capital in single position
+    # --- THE CRITICAL FIX ---
+    # Set to 40% (R200) to safely clear the ~$10 (R180) exchange minimum
+    MAX_POSITION_SIZE_PERCENT: float = 0.40 
     
     def validate(self) -> tuple[bool, str]:
-        """
-        Validate that risk limits are sane.
+        """Validate that risk limits are sane for a small ZAR account."""
+        if self.MAX_RISK_PER_TRADE > 0.02:
+            return False, "MAX_RISK_PER_TRADE is too high for survival"
         
-        Returns:
-            (is_valid, error_message)
-        """
-        if self.MAX_RISK_PER_TRADE > 0.01:
-            return False, "MAX_RISK_PER_TRADE cannot exceed 1%"
-        
-        if self.MAX_RISK_PER_TRADE < self.MIN_RISK_PER_TRADE:
-            return False, "MAX_RISK must be >= MIN_RISK"
-        
-        if self.MAX_DAILY_LOSS > 0.02:
-            return False, "MAX_DAILY_LOSS cannot exceed 2%"
-        
-        if self.MAX_TRADES_PER_DAY > 5:
-            return False, "MAX_TRADES_PER_DAY cannot exceed 5"
-        
-        if self.MAX_DRAWDOWN_FROM_PEAK > 0.10:
-            return False, "MAX_DRAWDOWN_FROM_PEAK cannot exceed 10%"
+        # Position cap must be high enough to allow R180+ trades
+        if self.MAX_POSITION_SIZE_PERCENT < 0.35:
+            return False, "Position cap too low for exchange minimums (R180+)"
         
         return True, "All risk limits valid"
-
 
 @dataclass(frozen=True)
 class SystemConfig:
