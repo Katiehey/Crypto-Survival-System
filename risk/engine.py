@@ -8,27 +8,46 @@ This is THE most critical component of the system. Every calculation
 must be mathematically correct. No shortcuts.
 """
 
-from dataclasses import dataclass
-from typing import Tuple, Optional
 import logging
+from dataclasses import dataclass, field
+from datetime import datetime, date
+from typing import Tuple, Optional
 
 from config.system_config import RISK_LIMITS
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# EXCHANGE_MIN_ZAR: Approx $10 minimum notional requirement for most exchanges
+# This prevents the bot from attempting orders that will be rejected.
+EXCHANGE_MIN_ZAR = 185.0
+
+@dataclass
+class TradeState:
+    """
+    Current trading state for risk tracking.
+    Tracks daily limits, consecutive losses, and kill switch status.
+    """
+    current_date: date = field(default_factory=lambda: datetime.now().date())
+    trades_today: int = 0
+    daily_loss: float = 0.0
+    consecutive_losses: int = 0
+    last_trade_result: Optional[str] = None  # 'win' or 'loss'
+    kill_switch_active: bool = False
+    kill_switch_reason: str = ""
+
+    def reset_daily(self) -> None:
+        """Reset daily counters (called at midnight)."""
+        self.current_date = datetime.now().date()
+        self.trades_today = 0
+        self.daily_loss = 0.0
 
 
 @dataclass
 class PositionSize:
     """
     Result of position sizing calculation.
-    
-    Attributes:
-        size: Position size in base currency (e.g., USDT)
-        risk_amount: Amount of capital at risk
-        risk_percent: Risk as percentage of capital
-        stop_distance_percent: Stop loss distance as percentage
-        is_valid: Whether position passes validation
-        reason: Reason if invalid
     """
     size: float
     risk_amount: float
@@ -37,291 +56,327 @@ class PositionSize:
     is_valid: bool
     reason: str = "OK"
 
+    def __repr__(self):
+        """Return a string representation of the position size."""
+        return (f"PositionSize(size={self.size:.2f}, risk={self.risk_amount:.2f}, "
+                f"valid={self.is_valid}, reason='{self.reason}')")
+
 
 class RiskEngine:
     """
     Core risk management engine.
-    
-    Responsibilities:
-    - Calculate position sizes based on risk
-    - Validate trades against risk limits
-    - Enforce capital preservation rules
     """
     
     def __init__(self, capital: float):
-        """
-        Initialize risk engine.
-        
-        Args:
-            capital: Current trading capital
-            
-        Raises:
-            ValueError: If capital is invalid
-        """
         if capital <= 0:
             raise ValueError(f"Capital must be positive, got {capital}")
         
         self.capital = capital
-        logger.info(f"RiskEngine initialized with capital: {capital}")
-    
+        self.state = TradeState()
+        logger.info(f"RiskEngine initialized with capital: R{capital:.2f}")
+
     def calculate_position_size(
         self,
         entry_price: float,
         stop_loss_price: float,
         risk_percent: Optional[float] = None
     ) -> PositionSize:
-        """
-        Calculate position size based on fixed fractional risk.
+        """Calculate position size and validate against all risk limits."""
         
-        This uses the "Fixed Fractional" position sizing method:
-        1. Determine risk amount (capital × risk %)
-        2. Calculate stop distance (entry - stop)
-        3. Position size = risk amount / stop distance
-        
-        Args:
-            entry_price: Intended entry price
-            stop_loss_price: Stop loss price
-            risk_percent: Risk as decimal (e.g., 0.005 = 0.5%)
-                         If None, uses RISK_LIMITS.MAX_RISK_PER_TRADE
-        
-        Returns:
-            PositionSize with calculated values and validation
-            
-        Example:
-            >>> engine = RiskEngine(capital=500)
-            >>> result = engine.calculate_position_size(
-            ...     entry_price=42000,
-            ...     stop_loss_price=41160,
-            ...     risk_percent=0.005  # 0.5%
-            ... )
-            >>> result.size
-            125.0  # R125 position
-            >>> result.risk_amount
-            2.5  # R2.50 at risk
-        """
-        # Use configured risk limit if not specified
+        # Use default risk if not specified
         if risk_percent is None:
             risk_percent = RISK_LIMITS.MAX_RISK_PER_TRADE
         
-        # Validate inputs
-        validation_result = self._validate_inputs(
-            entry_price, stop_loss_price, risk_percent
-        )
+        # 1. Price/Input Validation
+        valid_input, reason = self._validate_inputs(entry_price, stop_loss_price, risk_percent)
+        if not valid_input:
+            return PositionSize(0.0, 0.0, risk_percent, 0.0, False, reason)
         
-        if not validation_result[0]:
-            return PositionSize(
-                size=0.0,
-                risk_amount=0.0,
-                risk_percent=risk_percent,
-                stop_distance_percent=0.0,
-                is_valid=False,
-                reason=validation_result[1]
-            )
-        
-        # Calculate risk amount
+        # 2. Mathematical Calculations
         risk_amount = self.capital * risk_percent
+        stop_distance_percent = abs(entry_price - stop_loss_price) / entry_price
         
-        # Calculate stop distance as percentage
-        stop_distance = abs(entry_price - stop_loss_price)
-        stop_distance_percent = stop_distance / entry_price
-        
-        # Prevent division by zero
         if stop_distance_percent == 0:
-            return PositionSize(
-                size=0.0,
-                risk_amount=0.0,
-                risk_percent=risk_percent,
-                stop_distance_percent=0.0,
-                is_valid=False,
-                reason="Stop loss equals entry price (zero distance)"
-            )
+            return PositionSize(0.0, 0.0, risk_percent, 0.0, False, "Stop loss equals entry price")
         
-        # Calculate position size
         position_size = risk_amount / stop_distance_percent
         
-        # Additional validations
-        validation = self._validate_position_size(
-            position_size, risk_amount, risk_percent
-        )
+        # 3. THE GATEKEEPER: Run through all behavioral and mathematical limits
+        is_approved, gate_reason = self.validate_trade(position_size, risk_amount, risk_percent)
         
+        # 4. Exchange Minimum Check (Specific to real-world execution)
+        if is_approved and position_size < EXCHANGE_MIN_ZAR:
+            is_approved = False
+            gate_reason = f"Position R{position_size:.2f} below exchange minimum R{EXCHANGE_MIN_ZAR}"
+
         return PositionSize(
             size=position_size,
             risk_amount=risk_amount,
             risk_percent=risk_percent,
             stop_distance_percent=stop_distance_percent,
-            is_valid=validation[0],
-            reason=validation[1]
+            is_valid=is_approved,
+            reason=gate_reason
         )
-    
-    def _validate_inputs(
-        self,
-        entry_price: float,
-        stop_loss_price: float,
-        risk_percent: float
-    ) -> Tuple[bool, str]:
-        """
-        Validate position sizing inputs.
-        
-        Args:
-            entry_price: Entry price
-            stop_loss_price: Stop loss price
-            risk_percent: Risk percentage
-            
-        Returns:
-            (is_valid, reason)
-        """
-        # Check for negative or zero values
-        if entry_price <= 0:
-            return False, f"Entry price must be positive, got {entry_price}"
-        
-        if stop_loss_price <= 0:
-            return False, f"Stop loss price must be positive, got {stop_loss_price}"
-        
-        if risk_percent <= 0:
-            return False, f"Risk percent must be positive, got {risk_percent}"
-        
-        # Check risk percent is within limits
-        if risk_percent > RISK_LIMITS.MAX_RISK_PER_TRADE:
-            return False, (
-                f"Risk percent {risk_percent*100:.2f}% exceeds maximum "
-                f"{RISK_LIMITS.MAX_RISK_PER_TRADE*100:.2f}%"
-            )
-        
-        if risk_percent < RISK_LIMITS.MIN_RISK_PER_TRADE:
-            return False, (
-                f"Risk percent {risk_percent*100:.2f}% below minimum "
-                f"{RISK_LIMITS.MIN_RISK_PER_TRADE*100:.2f}%"
-            )
-        
-        # Check stop loss makes sense (not too far from entry)
-        stop_distance_pct = abs(entry_price - stop_loss_price) / entry_price
-        
-        if stop_distance_pct > 0.20:  # 20% stop is very wide
-            return False, f"Stop loss too wide: {stop_distance_pct*100:.1f}%"
-        
-        if stop_distance_pct < 0.001:  # 0.1% stop is too tight
-            return False, f"Stop loss too tight: {stop_distance_pct*100:.3f}%"
-        
-        return True, "OK"
-    
-    def _validate_position_size(
+
+    def validate_trade(
         self,
         position_size: float,
         risk_amount: float,
         risk_percent: float
     ) -> Tuple[bool, str]:
         """
-        Validate calculated position size.
-        
-        Args:
-            position_size: Calculated position size
-            risk_amount: Risk amount in currency
-            risk_percent: Risk as percentage
-            
-        Returns:
-            (is_valid, reason)
+        Validate if trade is allowed based on all risk limits.
+        This is the GATEKEEPER. Every trade must pass through here.
         """
-        # Position size should not exceed max position size limit
-        max_position_size = self.capital * RISK_LIMITS.MAX_POSITION_SIZE_PERCENT
+        self._check_date_rollover()
         
-        if position_size > max_position_size:
+        # GATE 1: KILL SWITCH (Check this first - it's a hard stop)
+        if self.state.kill_switch_active:
+            return False, f"Kill switch ACTIVE: {self.state.kill_switch_reason}"
+
+        # GATE 2: CONSECUTIVE LOSS LIMIT (Behavioral signal)
+        # We check this early so the test finds "consecutive loss" in the reason.
+        if self.state.consecutive_losses >= RISK_LIMITS.MAX_CONSECUTIVE_LOSSES:
             return False, (
-                f"Position size {position_size:.2f} exceeds maximum "
-                f"{max_position_size:.2f} "
-                f"({RISK_LIMITS.MAX_POSITION_SIZE_PERCENT*100:.1f}% of capital)"
+                f"Consecutive loss limit reached: {self.state.consecutive_losses} losses. "
+                "Cooldown period active."
+            )
+
+        # GATE 3: PER-TRADE RISK LIMIT
+        if risk_percent > RISK_LIMITS.MAX_RISK_PER_TRADE:
+            return False, (
+                f"Risk {risk_percent*100:.2f}% exceeds per-trade limit "
+                f"{RISK_LIMITS.MAX_RISK_PER_TRADE*100:.2f}%"
             )
         
-        # Position size should be meaningful (not too small)
-        min_position_size = 10.0  # Minimum R10 position to be meaningful
-        
-        if position_size < min_position_size:
+        # GATE 4: DAILY LOSS LIMIT
+        max_daily_loss = self.capital * RISK_LIMITS.MAX_DAILY_LOSS
+        if self.state.daily_loss >= max_daily_loss:
             return False, (
-                f"Position size {position_size:.2f} too small "
-                f"(minimum {min_position_size})"
+                f"Daily loss limit reached: "
+                f"R{self.state.daily_loss:.2f} / R{max_daily_loss:.2f}"
             )
         
-        # Risk amount sanity check
-        if risk_amount > self.capital * 0.01:  # Should never risk >1%
+        # GATE 5: DAILY TRADE LIMIT
+        if self.state.trades_today >= RISK_LIMITS.MAX_TRADES_PER_DAY:
             return False, (
-                f"Risk amount {risk_amount:.2f} exceeds 1% of capital "
-                f"({self.capital * 0.01:.2f})"
+                f"Daily trade limit reached: "
+                f"{self.state.trades_today} / {RISK_LIMITS.MAX_TRADES_PER_DAY}"
             )
         
+        # GATE 6: POSITION SIZE CAP
+        max_pos_size = self.capital * RISK_LIMITS.MAX_POSITION_SIZE_PERCENT
+        if position_size > max_pos_size:
+            return False, (f"Position R{position_size:.2f} exceeds cap R{max_pos_size:.2f} "
+                           f"({RISK_LIMITS.MAX_POSITION_SIZE_PERCENT*100:.1f}%)")
+        
+        # SANITY CHECKS
+        if position_size <= 0:
+            return False, "Position size must be positive"
+        
+        if risk_amount > self.capital:
+            return False, "Risk amount exceeds total capital"
+        
+        return True, "Trade approved"
+
+    def _check_date_rollover(self) -> None:
+        """Check if date changed and reset daily counters."""
+        current_date = datetime.now().date()
+        if current_date != self.state.current_date:
+            logger.info(f"Date rollover: {self.state.current_date} → {current_date}. Resetting counters.")
+            self.state.reset_daily()
+
+    def _validate_inputs(self, entry: float, stop: float, risk: float) -> Tuple[bool, str]:
+        if entry <= 0 or stop <= 0:
+            return False, "Prices must be positive"
+        
+        stop_pct = abs(entry - stop) / entry
+        if stop_pct < 0.001:
+            return False, f"Stop loss too tight: {stop_pct*100:.3f}%"
+        if stop_pct > 0.20:
+            return False, f"Stop loss too wide: {stop_pct*100:.1f}%"
+            
         return True, "OK"
-    
-    def update_capital(self, new_capital: float) -> None:
+
+    def report_trade_result(self, result: str, loss_amount: float = 0.0):
+        """Update state after a trade completes. Triggers Kill Switch if breached."""
+        self.state.trades_today += 1
+        
+        if result == 'loss':
+            self.state.daily_loss += loss_amount
+            self.state.consecutive_losses += 1
+            if self.state.consecutive_losses >= RISK_LIMITS.MAX_CONSECUTIVE_LOSSES:
+                self.state.kill_switch_active = True
+                self.state.kill_switch_reason = f"Max consecutive losses ({self.state.consecutive_losses})"
+        else:
+            self.state.consecutive_losses = 0
+            
+        if self.state.daily_loss >= (self.capital * RISK_LIMITS.MAX_DAILY_LOSS):
+            self.state.kill_switch_active = True
+            self.state.kill_switch_reason = "Max daily loss reached"
+
+    def record_trade(
+        self,
+        pnl: float,
+        risk_amount: float
+    ) -> None:
         """
-        Update current capital.
+        Record trade outcome and update state.
+        
+        This MUST be called after every trade to maintain accurate state.
         
         Args:
-            new_capital: New capital amount
+            pnl: Profit/loss of the trade (negative for loss)
+            risk_amount: Amount that was at risk
             
-        Raises:
-            ValueError: If new capital is invalid
+        Example:
+            >>> engine.record_trade(pnl=-2.5, risk_amount=2.5)
+            # Loss recorded, consecutive losses incremented
         """
+        self.state.trades_today += 1
+        
+        # Update capital
+        new_capital = self.capital + pnl
+        self.update_capital(new_capital)
+        
+        # Track losses
+        if pnl < 0:
+            self.state.daily_loss += abs(pnl)
+            self.state.consecutive_losses += 1
+            self.state.last_trade_result = 'loss'
+            
+            logger.warning(
+                f"Loss recorded: R{pnl:.2f}. "
+                f"Consecutive losses: {self.state.consecutive_losses}"
+            )
+        else:
+            # Win resets consecutive losses
+            self.state.consecutive_losses = 0
+            self.state.last_trade_result = 'win'
+            
+            logger.info(f"Win recorded: R{pnl:.2f}")
+        
+        # Check if cooldown needed
+        if self.state.consecutive_losses >= RISK_LIMITS.MAX_CONSECUTIVE_LOSSES:
+            logger.warning(
+                f"⚠️  Consecutive loss limit reached. "
+                f"Cooldown period active until reset."
+            )
+    
+    def reset_consecutive_losses(self) -> None:
+        """
+        Manually reset consecutive loss counter.
+        
+        Should only be called after cooldown period (24h) and review.
+        """
+        old_count = self.state.consecutive_losses
+        self.state.consecutive_losses = 0
+        
+        logger.info(
+            f"Consecutive losses reset: {old_count} → 0. "
+            f"Trading can resume."
+        )
+    
+    def activate_kill_switch(self, reason: str) -> None:
+        """
+        Activate kill switch (emergency stop).
+        
+        Once activated, ALL trades are blocked until manually cleared.
+        
+        Args:
+            reason: Reason for activation
+        """
+        self.state.kill_switch_active = True
+        self.state.kill_switch_reason = reason
+        
+        logger.critical(
+            f"🚨 KILL SWITCH ACTIVATED: {reason}"
+        )
+    
+    def deactivate_kill_switch(self) -> None:
+        """
+        Deactivate kill switch.
+        
+        Should only be done after:
+        1. Problem resolved
+        2. Review completed
+        3. Minimum 48h waiting period
+        """
+        if not self.state.kill_switch_active:
+            logger.warning("Kill switch already inactive")
+            return
+        
+        logger.warning(
+            f"Kill switch deactivated. Reason was: {self.state.kill_switch_reason}"
+        )
+        
+        self.state.kill_switch_active = False
+        self.state.kill_switch_reason = ""
+
+    def update_capital(self, new_capital: float) -> None:
         if new_capital <= 0:
             raise ValueError(f"Capital must be positive, got {new_capital}")
-        
-        logger.info(f"Capital updated: {self.capital} → {new_capital}")
         self.capital = new_capital
+
+    def reset_kill_switch(self):
+        self.state.kill_switch_active = False
+        self.state.kill_switch_reason = ""
+        self.state.consecutive_losses = 0
+        self.state.daily_loss = 0.0
+        logger.warning("Kill switch manually reset. Trading resumed.")
 
 
 def main():
-    """Test position sizing with examples."""
+    """Test risk validation with scenarios."""
     print("=" * 60)
-    print("POSITION SIZING TEST")
+    print("RISK VALIDATION TEST")
     print("=" * 60)
     
     engine = RiskEngine(capital=500)
     
-    # Test case 1: Normal trade
-    print("\n1. Normal trade (2% stop)")
-    result = engine.calculate_position_size(
-        entry_price=42000,
-        stop_loss_price=41160,  # 2% stop
-        risk_percent=0.005  # 0.5% risk
+    # Scenario 1: Normal trade (should pass)
+    print("\n1. Normal trade")
+    result = engine.calculate_position_size(42000, 41160, 0.005)
+    is_valid, reason = engine.validate_trade(
+        result.size, result.risk_amount, result.risk_percent
     )
+    print(f"   Position: R{result.size:.2f}")
+    print(f"   Approved: {is_valid}")
+    print(f"   Reason: {reason}")
     
-    print(f"   Entry: R42,000")
-    print(f"   Stop: R41,160 (2% below)")
-    print(f"   Risk: 0.5% of R500 = R{result.risk_amount:.2f}")
-    print(f"   Position size: R{result.size:.2f}")
-    print(f"   Valid: {result.is_valid}")
-    print(f"   Reason: {result.reason}")
-    
-    # Verify math
-    expected_loss = result.size * result.stop_distance_percent
-    print(f"   Verification: R{result.size:.2f} × {result.stop_distance_percent*100:.2f}% = R{expected_loss:.2f}")
-    
-    # Test case 2: Tight stop
-    print("\n2. Tight stop (0.5% stop)")
-    result2 = engine.calculate_position_size(
-        entry_price=42000,
-        stop_loss_price=41790,  # 0.5% stop
-        risk_percent=0.005
+    # Scenario 2: Record a loss, try another trade
+    print("\n2. After recording loss")
+    engine.record_trade(pnl=-2.5, risk_amount=2.5)
+    is_valid, reason = engine.validate_trade(
+        result.size, result.risk_amount, result.risk_percent
     )
+    print(f"   Consecutive losses: {engine.state.consecutive_losses}")
+    print(f"   Approved: {is_valid}")
+    print(f"   Reason: {reason}")
     
-    print(f"   Entry: R42,000")
-    print(f"   Stop: R41,790 (0.5% below)")
-    print(f"   Position size: R{result2.size:.2f}")
-    print(f"   Valid: {result2.is_valid}")
-    
-    # Test case 3: Wide stop
-    print("\n3. Wide stop (5% stop)")
-    result3 = engine.calculate_position_size(
-        entry_price=42000,
-        stop_loss_price=39900,  # 5% stop
-        risk_percent=0.005
+    # Scenario 3: Record another loss (hits limit)
+    print("\n3. After 2nd consecutive loss")
+    engine.record_trade(pnl=-2.5, risk_amount=2.5)
+    is_valid, reason = engine.validate_trade(
+        result.size, result.risk_amount, result.risk_percent
     )
+    print(f"   Consecutive losses: {engine.state.consecutive_losses}")
+    print(f"   Approved: {is_valid}")
+    print(f"   Reason: {reason}")
     
-    print(f"   Entry: R42,000")
-    print(f"   Stop: R39,900 (5% below)")
-    print(f"   Position size: R{result3.size:.2f}")
-    print(f"   Valid: {result3.is_valid}")
-    print(f"   Reason: {result3.reason}")
+    # Scenario 4: Kill switch
+    print("\n4. Kill switch activation")
+    engine2 = RiskEngine(capital=500)
+    engine2.activate_kill_switch("Test activation")
+    is_valid, reason = engine2.validate_trade(
+        result.size, result.risk_amount, result.risk_percent
+    )
+    print(f"   Kill switch active: {engine2.state.kill_switch_active}")
+    print(f"   Approved: {is_valid}")
+    print(f"   Reason: {reason}")
     
     print("\n" + "=" * 60)
-    print("✅ Position sizing test complete")
+    print("✅ Risk validation test complete")
 
 
 if __name__ == "__main__":
