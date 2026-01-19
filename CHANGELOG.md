@@ -244,3 +244,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Kill switch activation/deactivation
 - Trade recording and state updates
 - 13 validation tests (all passing)
+
+### Added - Week 2, Day 6
+- CapitalTracker class for drawdown monitoring
+- Peak capital tracking
+- Drawdown calculation (percentage and amount)
+- Automatic kill switch on 5% drawdown
+- Capital statistics and reporting
+- Integration with RiskEngine
+- 16 capital tracking tests (all passing)

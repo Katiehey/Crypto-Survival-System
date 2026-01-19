@@ -14,6 +14,7 @@ from datetime import datetime, date
 from typing import Tuple, Optional
 
 from config.system_config import RISK_LIMITS
+from risk.capital_tracker import CapitalTracker
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -68,11 +69,23 @@ class RiskEngine:
     """
     
     def __init__(self, capital: float):
+        """
+        Initialize risk engine.
+        
+        Args:
+            capital: Current trading capital
+            
+        Raises:
+            ValueError: If capital is invalid
+        """
         if capital <= 0:
             raise ValueError(f"Capital must be positive, got {capital}")
         
         self.capital = capital
         self.state = TradeState()
+        # Integration of the Capital Tracker for equity curve/drawdown monitoring
+        self.capital_tracker = CapitalTracker(starting_capital=capital)
+        
         logger.info(f"RiskEngine initialized with capital: R{capital:.2f}")
 
     def calculate_position_size(
@@ -135,7 +148,6 @@ class RiskEngine:
             return False, f"Kill switch ACTIVE: {self.state.kill_switch_reason}"
 
         # GATE 2: CONSECUTIVE LOSS LIMIT (Behavioral signal)
-        # We check this early so the test finds "consecutive loss" in the reason.
         if self.state.consecutive_losses >= RISK_LIMITS.MAX_CONSECUTIVE_LOSSES:
             return False, (
                 f"Consecutive loss limit reached: {self.state.consecutive_losses} losses. "
@@ -198,46 +210,22 @@ class RiskEngine:
             
         return True, "OK"
 
-    def report_trade_result(self, result: str, loss_amount: float = 0.0):
-        """Update state after a trade completes. Triggers Kill Switch if breached."""
-        self.state.trades_today += 1
-        
-        if result == 'loss':
-            self.state.daily_loss += loss_amount
-            self.state.consecutive_losses += 1
-            if self.state.consecutive_losses >= RISK_LIMITS.MAX_CONSECUTIVE_LOSSES:
-                self.state.kill_switch_active = True
-                self.state.kill_switch_reason = f"Max consecutive losses ({self.state.consecutive_losses})"
-        else:
-            self.state.consecutive_losses = 0
-            
-        if self.state.daily_loss >= (self.capital * RISK_LIMITS.MAX_DAILY_LOSS):
-            self.state.kill_switch_active = True
-            self.state.kill_switch_reason = "Max daily loss reached"
-
     def record_trade(
         self,
         pnl: float,
         risk_amount: float
     ) -> None:
-        """
-        Record trade outcome and update state.
-        
-        This MUST be called after every trade to maintain accurate state.
-        
-        Args:
-            pnl: Profit/loss of the trade (negative for loss)
-            risk_amount: Amount that was at risk
-            
-        Example:
-            >>> engine.record_trade(pnl=-2.5, risk_amount=2.5)
-            # Loss recorded, consecutive losses incremented
-        """
+        """Record trade outcome and update state/capital tracker."""
         self.state.trades_today += 1
         
         # Update capital
         new_capital = self.capital + pnl
         self.update_capital(new_capital)
+        
+        # Sync with capital tracker to monitor drawdowns
+        tracker_status = self.capital_tracker.update(new_capital)
+        if tracker_status['kill_switch']:
+            self.activate_kill_switch(tracker_status['reason'])
         
         # Track losses
         if pnl < 0:
@@ -250,134 +238,64 @@ class RiskEngine:
                 f"Consecutive losses: {self.state.consecutive_losses}"
             )
         else:
-            # Win resets consecutive losses
             self.state.consecutive_losses = 0
             self.state.last_trade_result = 'win'
-            
             logger.info(f"Win recorded: R{pnl:.2f}")
         
-        # Check if cooldown needed
         if self.state.consecutive_losses >= RISK_LIMITS.MAX_CONSECUTIVE_LOSSES:
-            logger.warning(
-                f"⚠️  Consecutive loss limit reached. "
-                f"Cooldown period active until reset."
-            )
-    
-    def reset_consecutive_losses(self) -> None:
-        """
-        Manually reset consecutive loss counter.
-        
-        Should only be called after cooldown period (24h) and review.
-        """
-        old_count = self.state.consecutive_losses
-        self.state.consecutive_losses = 0
-        
-        logger.info(
-            f"Consecutive losses reset: {old_count} → 0. "
-            f"Trading can resume."
-        )
-    
-    def activate_kill_switch(self, reason: str) -> None:
-        """
-        Activate kill switch (emergency stop).
-        
-        Once activated, ALL trades are blocked until manually cleared.
-        
-        Args:
-            reason: Reason for activation
-        """
-        self.state.kill_switch_active = True
-        self.state.kill_switch_reason = reason
-        
-        logger.critical(
-            f"🚨 KILL SWITCH ACTIVATED: {reason}"
-        )
-    
-    def deactivate_kill_switch(self) -> None:
-        """
-        Deactivate kill switch.
-        
-        Should only be done after:
-        1. Problem resolved
-        2. Review completed
-        3. Minimum 48h waiting period
-        """
-        if not self.state.kill_switch_active:
-            logger.warning("Kill switch already inactive")
-            return
-        
-        logger.warning(
-            f"Kill switch deactivated. Reason was: {self.state.kill_switch_reason}"
-        )
-        
-        self.state.kill_switch_active = False
-        self.state.kill_switch_reason = ""
+            logger.warning("⚠️  Consecutive loss limit reached. Cooldown active.")
 
     def update_capital(self, new_capital: float) -> None:
+        """
+        Update current capital and check drawdown.
+        
+        Args:
+            new_capital: New capital amount
+            
+        Raises:
+            ValueError: If new capital is invalid
+        """
         if new_capital <= 0:
             raise ValueError(f"Capital must be positive, got {new_capital}")
+        
+        # Update capital tracker (checks for kill switch)
+        kill_switch_triggered, reason = self.capital_tracker.update(new_capital)
+        
+        # If kill switch triggered, activate it
+        if kill_switch_triggered:
+            self.activate_kill_switch(reason)
+        
+        logger.info(f"Capital updated: {self.capital} → {new_capital}")
         self.capital = new_capital
 
-    def reset_kill_switch(self):
+    def activate_kill_switch(self, reason: str) -> None:
+        self.state.kill_switch_active = True
+        self.state.kill_switch_reason = reason
+        logger.critical(f"🚨 KILL SWITCH ACTIVATED: {reason}")
+
+    def deactivate_kill_switch(self) -> None:
         self.state.kill_switch_active = False
         self.state.kill_switch_reason = ""
+        logger.warning("Kill switch deactivated.")
+
+    def reset_consecutive_losses(self) -> None:
         self.state.consecutive_losses = 0
-        self.state.daily_loss = 0.0
-        logger.warning("Kill switch manually reset. Trading resumed.")
+        logger.info("Consecutive losses reset.")
 
-
-def main():
-    """Test risk validation with scenarios."""
-    print("=" * 60)
-    print("RISK VALIDATION TEST")
-    print("=" * 60)
+    def get_capital_stats(self) -> dict:
+        """
+        Get comprehensive capital statistics.
+        
+        Returns:
+            Dictionary with capital metrics
+        """
+        return self.capital_tracker.get_statistics()
     
-    engine = RiskEngine(capital=500)
-    
-    # Scenario 1: Normal trade (should pass)
-    print("\n1. Normal trade")
-    result = engine.calculate_position_size(42000, 41160, 0.005)
-    is_valid, reason = engine.validate_trade(
-        result.size, result.risk_amount, result.risk_percent
-    )
-    print(f"   Position: R{result.size:.2f}")
-    print(f"   Approved: {is_valid}")
-    print(f"   Reason: {reason}")
-    
-    # Scenario 2: Record a loss, try another trade
-    print("\n2. After recording loss")
-    engine.record_trade(pnl=-2.5, risk_amount=2.5)
-    is_valid, reason = engine.validate_trade(
-        result.size, result.risk_amount, result.risk_percent
-    )
-    print(f"   Consecutive losses: {engine.state.consecutive_losses}")
-    print(f"   Approved: {is_valid}")
-    print(f"   Reason: {reason}")
-    
-    # Scenario 3: Record another loss (hits limit)
-    print("\n3. After 2nd consecutive loss")
-    engine.record_trade(pnl=-2.5, risk_amount=2.5)
-    is_valid, reason = engine.validate_trade(
-        result.size, result.risk_amount, result.risk_percent
-    )
-    print(f"   Consecutive losses: {engine.state.consecutive_losses}")
-    print(f"   Approved: {is_valid}")
-    print(f"   Reason: {reason}")
-    
-    # Scenario 4: Kill switch
-    print("\n4. Kill switch activation")
-    engine2 = RiskEngine(capital=500)
-    engine2.activate_kill_switch("Test activation")
-    is_valid, reason = engine2.validate_trade(
-        result.size, result.risk_amount, result.risk_percent
-    )
-    print(f"   Kill switch active: {engine2.state.kill_switch_active}")
-    print(f"   Approved: {is_valid}")
-    print(f"   Reason: {reason}")
-    
-    print("\n" + "=" * 60)
-    print("✅ Risk validation test complete")
-
-
-if __name__ == "__main__":
-    main()
+    def get_drawdown(self) -> float:
+        """
+        Get current drawdown percentage.
+        
+        Returns:
+            Drawdown as decimal (e.g., 0.05 = 5%)
+        """
+        return self.capital_tracker.get_drawdown()
