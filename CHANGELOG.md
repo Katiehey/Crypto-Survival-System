@@ -272,3 +272,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cooldown periods ✓
 - Kill switch ✓
 - 52+ tests (all passing)
+
+## [Unreleased] - Week 2, Day 7
+
+### Added
+- Strategy framework (strategies/base.py)
+- Abstract Strategy base class
+- SignalType enum (LONG, SHORT, EXIT, NO_TRADE)
+- TradingSignal dataclass
+- Strategy validation framework
+- SimpleStrategy example implementation
+- 14 strategy framework tests (all passing)
