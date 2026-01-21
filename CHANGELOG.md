@@ -291,3 +291,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ATR-based stop loss calculation
 - Entry confidence scoring
 - 14 strategy tests (all passing)
+
+### Added - Week 2, Day 7
+- TradingWorkflow class (orchestrates complete flow)
+- Strategy-Risk integration
+- TradeDecision dataclass (complete decision tracking)
+- Decision logging and statistics
+- End-to-end workflow tests (10 tests)
+- Complete trading flow: data → regime → strategy → risk → decision
