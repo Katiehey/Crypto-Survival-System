@@ -141,6 +141,17 @@ class RiskEngine:
         
         position_size = risk_amount / stop_distance_percent
         
+        # NEW CHECK: Prevent leverage/position size exceeding total capital
+        if position_size > self.capital:
+            return PositionSize(
+                size=position_size,
+                risk_amount=risk_amount,
+                risk_percent=risk_percent,
+                stop_distance_percent=stop_distance_percent,
+                is_valid=False,
+                reason=f"Position size R{position_size:.2f} exceeds account capital R{self.capital:.2f}"
+            )
+
         # 3. THE GATEKEEPER: Run through all behavioral and mathematical limits
         is_approved, gate_reason = self.validate_trade(position_size, risk_amount, risk_percent)
         

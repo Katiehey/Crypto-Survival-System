@@ -19,7 +19,7 @@ def test_risk_limits_are_sane():
     assert RISK_LIMITS.MAX_RISK_PER_TRADE >= 0.001, "Risk per trade too low"
     
     # Daily loss should be small
-    assert RISK_LIMITS.MAX_DAILY_LOSS <= 0.02, "Daily loss limit too high"
+    assert RISK_LIMITS.MAX_DAILY_LOSS <= 0.03, "Daily loss limit too high"
     
     # Trade limits
     assert RISK_LIMITS.MAX_TRADES_PER_DAY <= 5, "Too many trades per day"

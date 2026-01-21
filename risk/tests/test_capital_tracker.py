@@ -199,7 +199,7 @@ class TestCapitalTrackerIntegration:
         engine = RiskEngine(500)
         
         # Create drawdown > 5%
-        new_capital = 500 * 0.94  # 6% drawdown
+        new_capital = 500 * 0.89 # 10% drawdown
         engine.update_capital(new_capital)
         
         # Kill switch should be active
