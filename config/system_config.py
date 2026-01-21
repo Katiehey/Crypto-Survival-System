@@ -28,11 +28,11 @@ class RiskLimits:
     
     # Position Risk (per trade)
     # Risking 0.5% of R500 = R2.50 per trade.
-    MAX_RISK_PER_TRADE: float = 0.005  
-    MIN_RISK_PER_TRADE: float = 0.0025  
+    MAX_RISK_PER_TRADE: float = 0.01
+    MIN_RISK_PER_TRADE: float = 0.005  
     
     # Daily Limits
-    MAX_DAILY_LOSS: float = 0.01  # 1% (R5.00)
+    MAX_DAILY_LOSS: float = 0.03  # 1% (R5.00)
     MAX_TRADES_PER_DAY: int = 3   
     
     # Streak Protection
@@ -41,11 +41,11 @@ class RiskLimits:
     LOSS_STREAK_COOLDOWN_HOURS: int = 24 
     
     # Kill Switch
-    MAX_DRAWDOWN_FROM_PEAK: float = 0.05  # 5% (R25.00)
+    MAX_DRAWDOWN_FROM_PEAK: float = 0.10 # 5% (R25.00)
     
     # --- THE CRITICAL FIX ---
     # Set to 40% (R200) to safely clear the ~$10 (R180) exchange minimum
-    MAX_POSITION_SIZE_PERCENT: float = 0.40 
+    MAX_POSITION_SIZE_PERCENT: float = 0.50
     
     def validate(self) -> tuple[bool, str]:
         """Validate that risk limits are sane for a small ZAR account."""

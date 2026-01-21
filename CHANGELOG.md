@@ -253,3 +253,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Capital statistics and reporting
 - Integration with RiskEngine
 - 16 capital tracking tests (all passing)
+
+### Added - Week 2, Day 6
+- Cooldown period after consecutive losses (24h)
+- Automatic cooldown activation/clearing
+- Comprehensive risk engine status reporting
+- Complete risk engine integration tests
+- Risk engine print_status() method
+- 10 integration tests (all passing)
+
+### Completed - Week 2, Day 6
+- Complete risk engine with all features
+- Position sizing ✓
+- Multi-gate validation ✓
+- Capital tracking ✓
+- Drawdown monitoring ✓
+- Daily limits ✓
+- Cooldown periods ✓
+- Kill switch ✓
+- 52+ tests (all passing)
