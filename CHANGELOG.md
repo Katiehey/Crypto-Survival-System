@@ -283,3 +283,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Strategy validation framework
 - SimpleStrategy example implementation
 - 14 strategy framework tests (all passing)
+
+### Added - Week 2, Day 7
+- SimpleTrendStrategy implementation
+- Trend entry logic (regime + efficiency + volume)
+- Trend exit logic (regime change + weakening)
+- ATR-based stop loss calculation
+- Entry confidence scoring
+- 14 strategy tests (all passing)
