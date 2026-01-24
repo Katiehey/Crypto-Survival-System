@@ -18,7 +18,7 @@ import pandas as pd
 import numpy as np
 
 from strategies.base import Strategy, TradingSignal, SignalType
-from config.system_config import SYSTEM_CONFIG
+from config.system_config import RISK_LIMITS, SYSTEM_CONFIG
 
 
 class SimpleTrendStrategy(Strategy):
@@ -258,31 +258,37 @@ class SimpleTrendStrategy(Strategy):
     
     def _calculate_stop_loss(self, entry_price: float, atr: float) -> float:
         """
-        Calculate stop loss price.
-        
-        Uses ATR-based stop: entry - (ATR × multiple)
-        
-        Args:
-            entry_price: Entry price
-            atr: Current ATR value
-            
-        Returns:
-            Stop loss price
+        Calculate stop loss price based on ATR while respecting Config limits.
         """
+        from config.system_config import RISK_LIMITS
+    
         if atr == 0 or np.isnan(atr):
-            # Fallback: 2% stop if ATR unavailable
-            return entry_price * 0.98
-        
+        # Fallback: Use a distance that corresponds to our MAX_POSITION_SIZE
+        # If we risk 1% and our max size is 50%, our stop must be at least 2% away.
+        # Calculation: Risk% / MaxSize% = 0.01 / 0.50 = 0.02 (2%)
+            fallback_pct = RISK_LIMITS.MAX_RISK_PER_TRADE / RISK_LIMITS.MAX_POSITION_SIZE_PERCENT
+            return entry_price * (1 - fallback_pct)
+
+    # 1. Calculate the ATR-based stop
         stop_distance = atr * self.stop_loss_atr_multiple
         stop_loss = entry_price - stop_distance
-        
-        # Ensure stop is reasonable (not too tight or too wide)
-        min_stop = entry_price * 0.95  # Max 5% stop
-        max_stop = entry_price * 0.99  # Min 1% stop
-        
-        stop_loss = max(min_stop, min(max_stop, stop_loss))
-        
-        return stop_loss
+    
+    # 2. Calculate the "Minimum Allowed Stop Distance" 
+    # This ensures the resulting position size won't exceed our Config's MAX_POSITION_SIZE_PERCENT.
+    # Logic: If stop is too tight, position size becomes too large for a spot account.
+        min_dist_pct = RISK_LIMITS.MAX_RISK_PER_TRADE / RISK_LIMITS.MAX_POSITION_SIZE_PERCENT
+        max_stop_price = entry_price * (1 - min_dist_pct)
+    
+    # 3. Calculate "Maximum Allowed Stop Distance" (Sanity Cap)
+    # Let's say we don't want a stop wider than 10% regardless of ATR.
+        min_stop_price = entry_price * 0.90 
+
+    # Apply constraints: 
+    # stop_loss cannot be higher than max_stop_price (too tight)
+    # stop_loss cannot be lower than min_stop_price (too wide)
+        final_stop = max(min_stop_price, min(max_stop_price, stop_loss))
+    
+        return final_stop
     
     def _calculate_entry_confidence(
         self,

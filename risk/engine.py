@@ -317,7 +317,7 @@ class RiskEngine:
         else:
             # Win resets consecutive losses and clears cooldown
             self.state.consecutive_losses = 0
-            self.state.cooldown_until = None
+            self.state.clear_cooldown()
             self.state.last_trade_result = 'win'
             
             logger.info(f"Win recorded: R{pnl:.2f}")
