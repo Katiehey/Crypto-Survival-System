@@ -7,6 +7,8 @@ Holds all results from a backtest execution.
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Dict, Optional
+from backtest.metrics import PerformanceMetrics
+
 import pandas as pd
 
 from backtest.trade import Trade
@@ -72,42 +74,48 @@ class BacktestResult:
         return delta.days
     
     def calculate_metrics(self) -> None:
-        """Calculate all derived metrics from trades."""
-        # Calculate capital metrics FIRST (these don't need trades)
-        self.total_return = self.final_capital - self.initial_capital
-        if self.initial_capital > 0:
-            self.total_return_pct = (self.total_return / self.initial_capital) * 100
-            
+        """
+        Calculate all derived metrics from trades using centralized PerformanceMetrics.
+        """
         if not self.trades:
+        # Calculate capital metrics even if no trades were taken
+            self.total_return = self.final_capital - self.initial_capital
+            if self.initial_capital > 0:
+                self.total_return_pct = (self.total_return / self.initial_capital) * 100
             return
+
+    # Use PerformanceMetrics for calculations if equity curve is available
+        if self.equity_curve is not None and not self.equity_curve.empty:
+            all_metrics = PerformanceMetrics.calculate_all_metrics(
+                trades=self.trades,
+                equity_curve=self.equity_curve,
+                initial_capital=self.initial_capital,
+                final_capital=self.final_capital,
+                start_date=self.start_date,
+                end_date=self.end_date
+            )
+                
+        # Update self with calculated metrics
+            self.total_return = all_metrics.get('total_return', 0.0)
+            self.total_return_pct = all_metrics.get('total_return_pct', 0.0)
+            self.sharpe_ratio = all_metrics.get('sharpe_ratio', 0.0)
+            self.max_drawdown = all_metrics.get('max_drawdown_pct', 0.0)
+            self.total_trades = all_metrics.get('total_trades', 0)
+            self.win_rate = all_metrics.get('win_rate', 0.0)
+            self.profit_factor = all_metrics.get('profit_factor', 0.0)
+            self.expectancy = all_metrics.get('expectancy', 0.0)
+            self.average_win = all_metrics.get('average_win', 0.0)
+            self.average_loss = all_metrics.get('average_loss', 0.0)
+        else:
+        # Fallback to basic calculations if equity_curve is missing
+            self.total_trades = len(self.trades)
+            self.winning_trades = sum(1 for t in self.trades if t.is_winner)
+            self.losing_trades = self.total_trades - self.winning_trades
+            self.win_rate = self.winning_trades / self.total_trades if self.total_trades > 0 else 0
         
-        # Basic counts
-        self.total_trades = len(self.trades)
-        self.winning_trades = sum(1 for t in self.trades if t.is_winner)
-        self.losing_trades = self.total_trades - self.winning_trades
-        
-        # Win rate
-        self.win_rate = self.winning_trades / self.total_trades if self.total_trades > 0 else 0
-        
-        # Returns
-        self.total_return = self.final_capital - self.initial_capital
-        self.total_return_pct = (self.total_return / self.initial_capital) * 100
-        
-        # Average win/loss
-        winners = [t.pnl for t in self.trades if t.is_winner]
-        losers = [t.pnl for t in self.trades if not t.is_winner]
-        
-        self.average_win = sum(winners) / len(winners) if winners else 0
-        self.average_loss = sum(losers) / len(losers) if losers else 0
-        
-        # Profit factor
-        total_wins = sum(winners) if winners else 0
-        total_losses = abs(sum(losers)) if losers else 0
-        
-        self.profit_factor = total_wins / total_losses if total_losses > 0 else 0
-        
-        # Expectancy
-        self.expectancy = sum(t.pnl for t in self.trades) / self.total_trades if self.total_trades > 0 else 0
+            self.total_return = self.final_capital - self.initial_capital
+            if self.initial_capital > 0:
+                self.total_return_pct = (self.total_return / self.initial_capital) * 100
     
     def get_summary(self) -> Dict:
         """Get summary statistics as dictionary."""
