@@ -73,6 +73,11 @@ class BacktestResult:
     
     def calculate_metrics(self) -> None:
         """Calculate all derived metrics from trades."""
+        # Calculate capital metrics FIRST (these don't need trades)
+        self.total_return = self.final_capital - self.initial_capital
+        if self.initial_capital > 0:
+            self.total_return_pct = (self.total_return / self.initial_capital) * 100
+            
         if not self.trades:
             return
         
