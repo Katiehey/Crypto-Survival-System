@@ -342,3 +342,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Strategy framework working
 - Complete workflow integrated
 - Ready for Week 3 (Backtesting)
+
+## [Unreleased] - Week 3, Day 11
+
+### Added - Backtest Engine Foundation
+- Trade dataclass with complete lifecycle tracking
+- PnL calculation with fee simulation
+- MFE/MAE (excursion) tracking
+- BacktestResult container with auto-metrics
+- BacktestDataLoader for historical data
+- Chronological feature calculation
+- Data quality validation
+- BacktestEngine core execution
+- Position class for trade tracking
+- Stop loss checking on every candle
+- Slippage simulation (0.1%)
+- Fee simulation (0.075%)
+- No look-ahead bias safeguards
+- Risk engine integration for sizing
+- 39 backtest tests (all passing)
+
+### Technical Details
+- Realistic execution model
+- Deterministic results (reproducible)
+- Capital tracking throughout backtest
+- Complete trade recording
+- Win rate, profit factor, expectancy metrics
+
+### Week 3 Progress
+- Day 11: Complete ✅
+- Total tests: 303 (100% passing)

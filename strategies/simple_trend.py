@@ -281,7 +281,7 @@ class SimpleTrendStrategy(Strategy):
     
     # 3. Calculate "Maximum Allowed Stop Distance" (Sanity Cap)
     # Let's say we don't want a stop wider than 10% regardless of ATR.
-        min_stop_price = entry_price * 0.90 
+        min_stop_price = entry_price * 0.95 
 
     # Apply constraints: 
     # stop_loss cannot be higher than max_stop_price (too tight)
