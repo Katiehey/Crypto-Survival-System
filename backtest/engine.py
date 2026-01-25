@@ -117,7 +117,9 @@ class BacktestEngine:
         end_date: Optional[datetime] = None,
         slippage: float = 0.001,  # 0.1%
         fee_rate: float = 0.00075,  # 0.075% (Binance)
-        data_limit: Optional[int] = None
+        data_limit: Optional[int] = None,
+        verbose=False,
+        risk_engine: Optional[RiskEngine] = None
     ):
         """
         Initialize backtest engine.
@@ -138,6 +140,8 @@ class BacktestEngine:
         self.slippage = slippage
         self.fee_rate = fee_rate
         self.data_limit = data_limit
+        self.verbose = verbose
+        self.risk_engine = RiskEngine(initial_capital)
         
         # State
         self.capital = initial_capital
@@ -238,6 +242,9 @@ class BacktestEngine:
                 self._get_data_up_to_current(),
                 current_position='long'
             )
+
+            if signal is None:
+                return
             
             if signal.signal_type == SignalType.EXIT:
                 self._close_position(candle, reason='strategy_exit')
@@ -249,6 +256,9 @@ class BacktestEngine:
                 self._get_data_up_to_current(),
                 current_position=None
             )
+
+            if signal is None:
+                return
             
             if signal.signal_type == SignalType.LONG:
                 self._open_position(candle, signal)
@@ -267,9 +277,9 @@ class BacktestEngine:
         # Use risk engine to calculate position size
         # For backtest, we create a temporary risk engine
         # (In practice, might want to maintain one risk engine instance)
-        risk_engine = RiskEngine(self.capital)
         
-        position_calc = risk_engine.calculate_position_size(
+        
+        position_calc = self.risk_engine.calculate_position_size(
             entry_price=entry_price,
             stop_loss_price=signal.stop_loss or (entry_price * 0.98)
         )
@@ -279,7 +289,7 @@ class BacktestEngine:
             return
         
         # Validate trade through risk engine
-        is_valid, reason = risk_engine.validate_trade(
+        is_valid, reason = self.risk_engine.validate_trade(
             position_calc.size,
             position_calc.risk_amount,
             position_calc.risk_percent
@@ -345,7 +355,8 @@ class BacktestEngine:
         
         # Update capital
         self.capital += trade.pnl
-        
+        self.risk_engine.record_trade(pnl=trade.pnl, risk_amount=self.current_position.size * 0.01)
+
         # Record trade
         self.trades.append(trade)
         

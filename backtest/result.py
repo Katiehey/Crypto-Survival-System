@@ -60,6 +60,13 @@ class BacktestResult:
     profit_factor: float = 0.0
     expectancy: float = 0.0
     
+    largest_win: float = 0.0
+    largest_loss: float = 0.0
+    win_loss_ratio: float = 0.0
+
+    max_consecutive_wins: int = 0
+    max_consecutive_losses: int = 0
+
     # Regime performance (calculated)
     regime_performance: Dict[str, Dict] = field(default_factory=dict)
     
@@ -67,6 +74,18 @@ class BacktestResult:
         """Calculate derived metrics."""
         self.calculate_metrics()
     
+    @property
+    def avg_win(self) -> float:
+        return self.average_win
+
+    @property
+    def avg_loss(self) -> float:
+        return self.average_loss
+
+    @property
+    def avg_trade(self) -> float:
+        return self.expectancy # Expectancy is effectively the average PnL per trade
+
     @property
     def duration_days(self) -> int:
         """Calculate backtest duration in days."""
@@ -106,13 +125,31 @@ class BacktestResult:
             self.expectancy = all_metrics.get('expectancy', 0.0)
             self.average_win = all_metrics.get('average_win', 0.0)
             self.average_loss = all_metrics.get('average_loss', 0.0)
+            self.largest_win = all_metrics.get('largest_win', 0.0)
+            self.largest_loss = all_metrics.get('largest_loss', 0.0)
+            self.win_loss_ratio = all_metrics.get('win_loss_ratio', 0.0)
+            self.max_consecutive_wins = all_metrics.get('max_consecutive_wins', 0)
+            self.max_consecutive_losses = all_metrics.get('max_consecutive_losses', 0)
         else:
-        # Fallback to basic calculations if equity_curve is missing
+            # Fallback to basic calculations if equity_curve is missing
+            pnls = [t.pnl for t in self.trades]
+            wins = [p for p in pnls if p > 0]
+            losses = [p for p in pnls if p < 0]
+            
             self.total_trades = len(self.trades)
-            self.winning_trades = sum(1 for t in self.trades if t.is_winner)
-            self.losing_trades = self.total_trades - self.winning_trades
+            self.winning_trades = len(wins)
+            self.losing_trades = len(losses)
             self.win_rate = self.winning_trades / self.total_trades if self.total_trades > 0 else 0
         
+            self.average_win = sum(wins) / len(wins) if wins else 0.0
+            self.average_loss = sum(losses) / len(losses) if losses else 0.0
+            self.profit_factor = abs(sum(wins) / sum(losses)) if losses and sum(losses) != 0 else 0.0
+            self.expectancy = sum(pnls) / self.total_trades if self.total_trades > 0 else 0.0
+
+            self.largest_win = max(pnls) if pnls else 0.0
+            self.largest_loss = min(pnls) if pnls else 0.0
+            self.win_loss_ratio = abs(self.average_win / self.average_loss) if self.average_loss != 0 else 0.0
+
             self.total_return = self.final_capital - self.initial_capital
             if self.initial_capital > 0:
                 self.total_return_pct = (self.total_return / self.initial_capital) * 100

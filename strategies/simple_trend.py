@@ -49,7 +49,9 @@ class SimpleTrendStrategy(Strategy):
         entry_efficiency_threshold: float = 0.65,
         exit_efficiency_threshold: float = 0.4,
         min_regime_confidence: float = 0.6,
-        stop_loss_atr_multiple: float = 2.0
+        stop_loss_atr_multiple: float = 2.0,
+        bad_regime_count: int = 0,
+        exit_patience: int = 2
     ):
         """
         Initialize simple trend strategy.
@@ -66,6 +68,8 @@ class SimpleTrendStrategy(Strategy):
         self.exit_efficiency_threshold = exit_efficiency_threshold
         self.min_regime_confidence = min_regime_confidence
         self.stop_loss_atr_multiple = stop_loss_atr_multiple
+        self.bad_regime_count = 0
+        self.exit_patience = 2
         
         self.logger.info(
             f"SimpleTrendStrategy initialized: "
@@ -220,40 +224,28 @@ class SimpleTrendStrategy(Strategy):
             }
         )
     
-    def _check_exit_conditions(
-        self,
-        regime: str,
-        efficiency: float,
-        close_price: float,
-        atr: float
-    ) -> Optional[TradingSignal]:
-        """
-        Check if exit conditions are met.
-        
-        Returns:
-            TradingSignal (EXIT) if should exit, None otherwise
-        """
-        # Exit condition 1: Regime changed to unfavorable
-        if regime in ['range', 'chaos', 'no_trade']:
+    def _check_exit_conditions(self, regime, efficiency, close_price, atr) -> Optional[TradingSignal]:
+        # Condition: Is the regime currently bad?
+        regime_is_bad = regime in ['range', 'chaos', 'no_trade']
+        efficiency_is_low = efficiency < self.exit_efficiency_threshold
+
+        if regime_is_bad or efficiency_is_low:
+            self.bad_regime_count += 1
+            self.logger.info(f"⚠️ Exit Warning: {regime} (ER: {efficiency:.2f}) | Count: {self.bad_regime_count}")
+        else:
+            self.bad_regime_count = 0 # Reset if trend resumes
+
+        # Only exit if we've seen 'n' consecutive bad candles
+        if self.bad_regime_count >= self.exit_patience:
+            self.bad_regime_count = 0 # Reset for next trade
             return TradingSignal(
                 signal_type=SignalType.EXIT,
                 confidence=0.9,
                 entry_price=close_price,
                 regime=regime,
-                reason=f"EXIT: Regime changed to {regime}"
+                reason=f"EXIT: Trend failure confirmed after {self.exit_patience} periods"
             )
         
-        # Exit condition 2: Trend weakening
-        if efficiency < self.exit_efficiency_threshold:
-            return TradingSignal(
-                signal_type=SignalType.EXIT,
-                confidence=0.8,
-                entry_price=close_price,
-                regime=regime,
-                reason=f"EXIT: Trend weakening (ER={efficiency:.2f})"
-            )
-        
-        # No exit conditions met
         return None
     
     def _calculate_stop_loss(self, entry_price: float, atr: float) -> float:
