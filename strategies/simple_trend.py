@@ -13,12 +13,19 @@ This is a simple, robust strategy designed for:
 - Clear, testable rules
 """
 
+from fileinput import close
+from signal import signal
+from kiwisolver import strength
+from kiwisolver import strength
 from typing import Optional
 import pandas as pd
 import numpy as np
+from scipy import signal
 
 from strategies.base import Strategy, TradingSignal, SignalType
 from config.system_config import RISK_LIMITS, SYSTEM_CONFIG
+from regime.classifier import Regime, RegimeClassification
+from strategies.base import TradingSignal, SignalType
 
 
 class SimpleTrendStrategy(Strategy):
@@ -46,12 +53,12 @@ class SimpleTrendStrategy(Strategy):
     
     def __init__(
         self,
-        entry_efficiency_threshold: float = 0.65,
-        exit_efficiency_threshold: float = 0.4,
-        min_regime_confidence: float = 0.6,
-        stop_loss_atr_multiple: float = 2.0,
-        bad_regime_count: int = 0,
-        exit_patience: int = 2
+        entry_efficiency_threshold: float = 0.25,  # Only strong, directional moves
+        exit_efficiency_threshold: float = 0.70,   # Exit before the trend completely dies
+        min_regime_confidence: float = 0.60,       # High conviction only
+        stop_loss_atr_multiple: float = 3.0,       # Tighter stops for better R:R
+        exit_patience: int = 12,                    # Don't wait 10 bars in chaos
+        take_profit_multiplier: float = 5.0,
     ):
         """
         Initialize simple trend strategy.
@@ -69,7 +76,14 @@ class SimpleTrendStrategy(Strategy):
         self.min_regime_confidence = min_regime_confidence
         self.stop_loss_atr_multiple = stop_loss_atr_multiple
         self.bad_regime_count = 0
-        self.exit_patience = 2
+        self.exit_patience = exit_patience
+        self.take_profit_multiplier = take_profit_multiplier # <--- ADD THIS
+        self.entry_price = 0.0
+        self.highest_price = 0.0 
+        self.stop_loss = 0.0 
+        self.bar_count = 0
+        
+
         
         self.logger.info(
             f"SimpleTrendStrategy initialized: "
@@ -79,7 +93,7 @@ class SimpleTrendStrategy(Strategy):
     
     def generate_signal(
         self,
-        data: pd.DataFrame,
+        dataframe: pd.DataFrame,
         current_position: Optional[str] = None
     ) -> TradingSignal:
         """
@@ -92,195 +106,166 @@ class SimpleTrendStrategy(Strategy):
         Returns:
             TradingSignal with recommended action
         """
-        # Validate data
-        self.validate_data(data)
-        self._validate_strategy_data(data)
-        
-        # Get latest data point
-        latest = data.iloc[-1]
-        
-        # Extract values
-        regime = latest['regime']
-        regime_confidence = latest.get('regime_confidence', 0.0)
-        efficiency = latest.get('efficiency_ratio', 0.0)
-        volume_regime = latest.get('volume_regime', 'unknown')
-        close_price = latest['close']
-        atr = latest.get('atr', 0.0)
-        
-        # If we have a position, check exit conditions
-        if current_position == 'long':
-            signal = self._check_exit_conditions(
-                regime, efficiency, close_price, atr
-            )
-            if signal:
-                self.record_signal(signal)
-                return signal
-        
-        # Check entry conditions (only if no position)
-        if current_position is None:
-            signal = self._check_entry_conditions(
-                regime, regime_confidence, efficiency,
-                volume_regime, close_price, atr
-            )
-            self.record_signal(signal)
-            return signal
-        
-        # Default: hold current position
-        signal = TradingSignal(
-            signal_type=SignalType.NO_TRADE,
-            confidence=0.5,
-            entry_price=close_price,
-            regime=regime,
-            reason="Holding current position, no action needed"
+        if len(dataframe) < 30:
+            return TradingSignal(SignalType.NO_TRADE, 0.0, dataframe.iloc[-1]['close'], reason="Waiting for data")
+
+        current_row = dataframe.iloc[-1]
+        regime = str(current_row.get('regime', 'none')).lower()
+        close_price = float(current_row['close'])
+        atr = float(current_row.get('atr', 0))
+        efficiency = float(current_row.get('efficiency_ratio', 0))
+        confidence = float(current_row.get('regime_confidence', 0))
+        atr_history = dataframe['atr']
+        avg_atr = atr_history.rolling(10).mean().iloc[-1]
+        is_atr_expanding = atr > avg_atr
+
+    # 2. EXIT LOGIC
+        if current_position is not None:
+            return self._check_exit_conditions(regime, efficiency, close_price, atr)
+
+    # 3. THE GATEKEEPER (Regime Filter)
+    # This returns IMMEDIATELY, preventing the 'UnboundLocalError' below
+        if regime != 'trend':
+            return TradingSignal(SignalType.NO_TRADE, 0.0, close_price, reason=f"Regime: {regime}")
+
+    # 4. ENTRY LOGIC (Only reached if regime == 'trend')
+    # We define 'signal' here so it exists for the 'Bouncer' check below
+        raw_strength = current_row.get('trend_strength', 0.0)
+        strength = float(raw_strength) if not isinstance(raw_strength, str) else 30.0 
+
+        signal = self._check_entry_conditions(
+            regime=regime, confidence=confidence, efficiency=efficiency,
+            volume_regime=current_row.get('volume_regime', 'normal'), 
+            close=close_price, atr=atr, t_strength=strength, 
+            e_smooth=efficiency, v_spike=is_atr_expanding
         )
+
+    # 5. THE BOUNCER (Final Filter)
+        if signal.signal_type == SignalType.LONG:
+            price_sma = dataframe['close'].tail(20).mean()
+            is_trending = strength > 15
+            above_sma = close_price > price_sma
         
-        self.record_signal(signal)
+            if is_trending and above_sma:
+            # Setup internal tracking for the trade
+                self.entry_price = close_price
+                self.stop_loss = signal.stop_loss
+                self.highest_price = close_price
+                self.bar_count = 0
+                return signal
+            else:
+                fail_reason = f"Filtered -> Str: {strength:.1f}>15 ({is_trending}) | Above SMA: {above_sma}"
+                return TradingSignal(SignalType.NO_TRADE, 0.0, close_price, reason=fail_reason)
+    
         return signal
     
     def _check_entry_conditions(
-        self,
-        regime: str,
-        regime_confidence: float,
-        efficiency: float,
-        volume_regime: str,
-        close_price: float,
-        atr: float
+        self, 
+        regime: str, 
+        confidence: float, 
+        efficiency: float, 
+        volume_regime: str, 
+        close: float, 
+        atr: float,
+        t_strength: float,
+        e_smooth: float,
+        v_spike: bool
     ) -> TradingSignal:
         """
-        Check if entry conditions are met.
-        
-        Returns:
-            TradingSignal (LONG or NO_TRADE)
+        Refined Entry Logic with Survival Rules.
+        Now matches the 9 arguments passed by generate_signal.
         """
-        reasons = []
         
-        # Condition 1: Must be in TREND regime
-        if regime != 'trend':
-            return TradingSignal(
-                signal_type=SignalType.NO_TRADE,
-                confidence=0.0,
-                entry_price=close_price,
-                regime=regime,
-                reason=f"Wrong regime: {regime} (need: trend)"
-            )
-        
-        reasons.append("✓ TREND regime")
-        
-        # Condition 2: Regime confidence must be sufficient
-        if regime_confidence < self.min_regime_confidence:
-            return TradingSignal(
-                signal_type=SignalType.NO_TRADE,
-                confidence=0.0,
-                entry_price=close_price,
-                regime=regime,
-                reason=f"Low regime confidence: {regime_confidence:.2f} < {self.min_regime_confidence}"
-            )
-        
-        reasons.append(f"✓ Confidence: {regime_confidence:.2f}")
-        
-        # Condition 3: Efficiency must indicate strong trend
+        # 1. Regime Filter (Primary Gate)
+        if str(regime).strip().lower() != 'trend':
+            return TradingSignal(SignalType.NO_TRADE, 0.0, close, reason=f"Regime: {regime}")
+
+        # 2. Efficiency Filter (Survival Rule)
+        # Using 0.40 as discussed to catch moves early but filter noise
         if efficiency < self.entry_efficiency_threshold:
-            return TradingSignal(
-                signal_type=SignalType.NO_TRADE,
-                confidence=0.0,
-                entry_price=close_price,
-                regime=regime,
-                reason=f"Weak trend: ER={efficiency:.2f} < {self.entry_efficiency_threshold}"
-            )
-        
-        reasons.append(f"✓ Strong trend: ER={efficiency:.2f}")
-        
-        # Condition 4: Volume should be normal or high
-        if volume_regime not in ['normal', 'high', 'very_high']:
-            return TradingSignal(
-                signal_type=SignalType.NO_TRADE,
-                confidence=0.3,
-                entry_price=close_price,
-                regime=regime,
-                reason=f"Low volume: {volume_regime}"
-            )
-        
-        reasons.append(f"✓ Volume: {volume_regime}")
-        
-        # All conditions met - generate LONG signal
-        stop_loss = self._calculate_stop_loss(close_price, atr)
-        
-        # Calculate confidence based on how strong the signal is
-        confidence = self._calculate_entry_confidence(
-            efficiency, regime_confidence, volume_regime
-        )
-        
+            return TradingSignal(SignalType.NO_TRADE, 0.0, close, reason=f"Low Efficiency: {efficiency:.2f}")
+
+        if not v_spike:
+            return TradingSignal(SignalType.NO_TRADE, 0.0, close, reason="ATR not expanding")
+
+        # 3. Confidence Filter
+        if confidence < self.min_regime_confidence:
+             return TradingSignal(SignalType.NO_TRADE, 0.0, close, reason="Low Regime Confidence")
+
+        # 4. Math Check: Ensure ATR is valid for Stop Loss
+        if atr <= 0:
+            return TradingSignal(SignalType.NO_TRADE, 0.0, close, reason="Invalid ATR")
+
+        # 5. Calculate Stop Loss & Confidence
+        stop_loss = self._calculate_stop_loss(close, atr)
+        signal_confidence = self._calculate_entry_confidence(efficiency, confidence, volume_regime)
+
         return TradingSignal(
             signal_type=SignalType.LONG,
-            confidence=confidence,
-            entry_price=close_price,
+            confidence=signal_confidence,
+            entry_price=close,
             stop_loss=stop_loss,
-            regime=regime,
-            reason=f"LONG entry: {', '.join(reasons)}",
-            metadata={
-                'efficiency': efficiency,
-                'volume_regime': volume_regime,
-                'atr': atr,
-            }
+            reason="Trend confirmed with ATR expansion"
         )
     
-    def _check_exit_conditions(self, regime, efficiency, close_price, atr) -> Optional[TradingSignal]:
-        # Condition: Is the regime currently bad?
-        regime_is_bad = regime in ['range', 'chaos', 'no_trade']
-        efficiency_is_low = efficiency < self.exit_efficiency_threshold
-
-        if regime_is_bad or efficiency_is_low:
-            self.bad_regime_count += 1
-            self.logger.info(f"⚠️ Exit Warning: {regime} (ER: {efficiency:.2f}) | Count: {self.bad_regime_count}")
-        else:
-            self.bad_regime_count = 0 # Reset if trend resumes
-
-        # Only exit if we've seen 'n' consecutive bad candles
-        if self.bad_regime_count >= self.exit_patience:
-            self.bad_regime_count = 0 # Reset for next trade
-            return TradingSignal(
-                signal_type=SignalType.EXIT,
-                confidence=0.9,
-                entry_price=close_price,
-                regime=regime,
-                reason=f"EXIT: Trend failure confirmed after {self.exit_patience} periods"
-            )
         
-        return None
     
+    def _check_exit_conditions(self, regime, efficiency, close_price, atr) -> Optional[TradingSignal]:
+        """
+        Refactored Exit Logic: Uses Trailing Stops and removes Regime-flipping exits.
+        """
+        self.bar_count += 1
+    
+    # Track peak for trailing
+        if close_price > self.highest_price:
+            self.highest_price = close_price
+
+    # A. SURVIVAL RULE: The "3-Hour Momentum" Check
+    # If we are 3 candles in and not in profit, the trend is likely a fakeout.
+        if self.bar_count >= 12 and close_price <= self.entry_price:
+            return TradingSignal(SignalType.EXIT, 1.0, close_price, reason="Survival: No momentum")
+
+    # B. DYNAMIC TRAILING: Chandelier Exit (2.5x ATR)
+    # This gives the trade room to move while protecting the downside.
+        trail_stop = self.highest_price - (atr * 2.5)
+        if trail_stop > self.stop_loss:
+            self.stop_loss = trail_stop
+
+    # C. REGIME PROTECTION: Exit if market becomes 'Chaos' or 'Range'
+        if regime in ['chaos', 'range']:
+            return TradingSignal(SignalType.EXIT, 1.0, close_price, reason=f"Regime Shift: {regime}")
+
+    # D. FINAL TRIGGER: Stop Hit
+        if close_price <= self.stop_loss:
+            return TradingSignal(SignalType.EXIT, 1.0, close_price, reason=f"Stop Hit @ {self.stop_loss:.2f}")
+
+        return TradingSignal(SignalType.NO_TRADE, 0.0, close_price, reason="Trend Active")
+    
+
     def _calculate_stop_loss(self, entry_price: float, atr: float) -> float:
         """
         Calculate stop loss price based on ATR while respecting Config limits.
         """
         from config.system_config import RISK_LIMITS
     
-        if atr == 0 or np.isnan(atr):
+        if atr == 0 or np.isnan(atr) or atr is None:
         # Fallback: Use a distance that corresponds to our MAX_POSITION_SIZE
         # If we risk 1% and our max size is 50%, our stop must be at least 2% away.
         # Calculation: Risk% / MaxSize% = 0.01 / 0.50 = 0.02 (2%)
             fallback_pct = RISK_LIMITS.MAX_RISK_PER_TRADE / RISK_LIMITS.MAX_POSITION_SIZE_PERCENT
             return entry_price * (1 - fallback_pct)
 
-    # 1. Calculate the ATR-based stop
         stop_distance = atr * self.stop_loss_atr_multiple
         stop_loss = entry_price - stop_distance
-    
-    # 2. Calculate the "Minimum Allowed Stop Distance" 
-    # This ensures the resulting position size won't exceed our Config's MAX_POSITION_SIZE_PERCENT.
-    # Logic: If stop is too tight, position size becomes too large for a spot account.
+        
+        # Keep the max_stop_price check (prevents position size errors)
         min_dist_pct = RISK_LIMITS.MAX_RISK_PER_TRADE / RISK_LIMITS.MAX_POSITION_SIZE_PERCENT
         max_stop_price = entry_price * (1 - min_dist_pct)
-    
-    # 3. Calculate "Maximum Allowed Stop Distance" (Sanity Cap)
-    # Let's say we don't want a stop wider than 10% regardless of ATR.
-        min_stop_price = entry_price * 0.95 
-
-    # Apply constraints: 
-    # stop_loss cannot be higher than max_stop_price (too tight)
-    # stop_loss cannot be lower than min_stop_price (too wide)
-        final_stop = max(min_stop_price, min(max_stop_price, stop_loss))
-    
-        return final_stop
+        
+        # REMOVE the 0.95 (5%) floor. Let the ATR do its job.
+        final_stop = min(max_stop_price, stop_loss)
+        
+        return float(final_stop)
     
     def _calculate_entry_confidence(
         self,
@@ -305,9 +290,8 @@ class SimpleTrendStrategy(Strategy):
             Confidence score (0-1)
         """
         # Base confidence from efficiency
-        # Map 0.65-1.0 to 0.6-1.0
-        eff_confidence = (efficiency - 0.65) / 0.35 * 0.4 + 0.6
-        eff_confidence = np.clip(eff_confidence, 0.6, 1.0)
+        eff_range = 1.0 - self.entry_efficiency_threshold
+        eff_confidence = (efficiency - self.entry_efficiency_threshold) / eff_range * 0.4 + 0.6
         
         # Adjust for regime confidence
         confidence = eff_confidence * regime_confidence
@@ -316,7 +300,8 @@ class SimpleTrendStrategy(Strategy):
         if volume_regime == 'high' or volume_regime == 'very_high':
             confidence = min(1.0, confidence * 1.1)
         
-        return confidence
+        final_conf = eff_confidence * regime_confidence
+        return max(0.60, final_conf)
     
     def _validate_strategy_data(self, data: pd.DataFrame) -> None:
         """
@@ -357,7 +342,6 @@ class SimpleTrendStrategy(Strategy):
         Returns:
             True if compatible
         """
-        # Only trade in TREND regime
         return regime == 'trend'
 
 

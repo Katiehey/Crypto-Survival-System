@@ -92,6 +92,23 @@ class BacktestResult:
         delta = self.end_date - self.start_date
         return delta.days
     
+    def calculate_regime_stats(self) -> Dict:
+        """Calculate regime-based performance statistics."""
+        if not self.trades:
+            return {}
+        
+        # Internal import to avoid circular dependency
+        from backtest.regime_analysis import RegimeAnalyzer
+        analyzer = RegimeAnalyzer()
+        return analyzer.analyze_trades(self.trades)
+    
+    @property
+    def regime_stats(self) -> Dict:
+        """Get regime-based statistics (lazy-loaded)."""
+        if not hasattr(self, '_regime_stats') or not self._regime_stats:
+            self._regime_stats = self.calculate_regime_stats()
+        return self._regime_stats
+
     def calculate_metrics(self) -> None:
         """
         Calculate all derived metrics from trades using centralized PerformanceMetrics.
@@ -154,6 +171,67 @@ class BacktestResult:
             if self.initial_capital > 0:
                 self.total_return_pct = (self.total_return / self.initial_capital) * 100
     
+    def calculate_advanced_metrics(self) -> dict:
+        """Calculate advanced performance metrics."""
+        if not self.trades:
+            return {}
+        
+        # Create equity series from trades
+        from backtest.equity_curve import create_equity_curve_from_trades
+        
+        curve = create_equity_curve_from_trades(self.trades, self.initial_capital)
+        equity_series = curve.get_equity_series()
+        
+        # Calculate returns series
+        returns_series = equity_series.pct_change().dropna()
+        
+        # Calculate advanced metrics
+        from backtest.metrics import PerformanceMetrics
+        
+        advanced_metrics = PerformanceMetrics.calculate_all_advanced_metrics(
+            self.trades, equity_series, returns_series
+        )
+        
+        return advanced_metrics
+    
+    @property
+    def advanced_metrics(self) -> dict:
+        """Get advanced performance metrics."""
+        if not hasattr(self, '_advanced_metrics'):
+            self._advanced_metrics = self.calculate_advanced_metrics()
+        return self._advanced_metrics
+    
+    # Add advanced metrics as properties
+    @property
+    def calmar_ratio(self) -> float:
+        """Get Calmar ratio."""
+        return self.advanced_metrics.get('calmar_ratio', 0.0)
+    
+    @property
+    def sortino_ratio(self) -> float:
+        """Get Sortino ratio."""
+        return self.advanced_metrics.get('sortino_ratio', 0.0)
+    
+    @property
+    def ulcer_index(self) -> float:
+        """Get Ulcer Index."""
+        return self.advanced_metrics.get('ulcer_index', 0.0)
+    
+    @property
+    def recovery_factor(self) -> float:
+        """Get Recovery Factor."""
+        return self.advanced_metrics.get('recovery_factor', 0.0)
+    
+    @property
+    def risk_of_ruin(self) -> float:
+        """Get Risk of Ruin probability."""
+        return self.advanced_metrics.get('risk_of_ruin', 0.0)
+    
+    @property
+    def kelly_criterion(self) -> float:
+        """Get Kelly Criterion percentage."""
+        return self.advanced_metrics.get('kelly_criterion', 0.0)
+
     def get_summary(self) -> Dict:
         """Get summary statistics as dictionary."""
         return {
@@ -218,6 +296,12 @@ class BacktestResult:
         print(f"   Profit Factor: {self.profit_factor:.2f}")
         print(f"   Expectancy: R{self.expectancy:+.2f}")
         
+        if self.regime_performance and 'by_entry' in self.regime_performance:
+            print("-" * 60)
+            print("🎭 REGIME INSIGHTS (by Entry)")
+            for regime, data in self.regime_performance['by_entry'].items():
+                print(f"   {regime:<8}: {data['count']} trades | Win: {data['win_rate']*100:>5.1f}% | Avg: R{data['avg_pnl']:>+6.2f}")
+
         print("\n" + "=" * 60)
 
 

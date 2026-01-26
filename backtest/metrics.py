@@ -14,6 +14,7 @@ from typing import List, Tuple, Optional
 import pandas as pd
 import numpy as np
 from datetime import datetime
+from scipy import stats
 
 from backtest.trade import Trade
 
@@ -89,42 +90,34 @@ class PerformanceMetrics:
             >>> equity = pd.Series([100, 110, 105, 95, 100, 115])
             >>> max_dd, duration, start, end = PerformanceMetrics.max_drawdown(equity)
         """
-        if len(equity_curve) < 2:
-            return 0.0, 0, 0, 0
-        
-        # Calculate running maximum
-        running_max = equity_curve.expanding().max()
-        
-        # Calculate drawdown at each point
-        drawdown = (equity_curve - running_max) / running_max
-        
-        # Find maximum drawdown
-        max_dd = drawdown.min()
-        max_dd_idx = drawdown.idxmin()
-        
-        # Find start of drawdown (last peak before max dd)
-        start_idx = 0
-        if max_dd_idx > 0:
-            # Find the peak before the trough
-            before_trough = equity_curve.iloc[:max_dd_idx + 1]
-            start_idx = before_trough.idxmax()
-        
-        # Find end of drawdown (recovery to new high, or end of data)
-        end_idx = len(equity_curve) - 1
-        if max_dd_idx < len(equity_curve) - 1:
-            # Look for recovery after trough
-            after_trough = equity_curve.iloc[max_dd_idx:]
-            peak_value = equity_curve.iloc[start_idx]
+        if equity_curve.empty:
+            return 0.0, None, None, 0
             
-            # Find first point that exceeds previous peak
-            recovery = after_trough[after_trough >= peak_value]
-            if len(recovery) > 0:
-                end_idx = recovery.index[0]
+        # 1. Use values to avoid Timestamp vs Int comparison issues
+        values = equity_curve.values
+        rolling_max = np.maximum.accumulate(values)
         
-        # Calculate duration
-        duration = end_idx - start_idx
+        # Avoid division by zero
+        drawdowns = np.where(rolling_max > 0, (rolling_max - values) / rolling_max, 0.0)
         
-        return abs(max_dd) * 100, duration, start_idx, end_idx
+        max_dd = np.max(drawdowns)
+        max_dd_pos = np.argmax(drawdowns)
+        
+        # 2. If no drawdown exists, return zeros
+        if max_dd <= 0:
+            return 0.0, equity_curve.index[0], equity_curve.index[0], 0
+
+        # 3. Find the peak that preceded this drawdown
+        peak_pos = np.argmax(values[:max_dd_pos + 1])
+        
+        # Map positions back to actual Timestamps/Indices
+        max_dd_idx = equity_curve.index[max_dd_pos]
+        peak_idx = equity_curve.index[peak_pos]
+        
+        # Calculate duration (number of periods)
+        duration = max_dd_pos - peak_pos
+        
+        return float(max_dd), peak_idx, max_dd_idx, int(duration)
     
     @staticmethod
     def profit_factor(trades: List[Trade]) -> float:
@@ -362,6 +355,266 @@ class PerformanceMetrics:
             'max_consecutive_losses': max_losses,
             'total_trades': len(trades),
         }
+    
+    @staticmethod
+    def calmar_ratio(total_return_pct: float, max_drawdown_pct: float) -> float:
+        """
+        Calculate Calmar Ratio (return to max drawdown ratio).
+        
+        Args:
+            total_return_pct: Total return percentage
+            max_drawdown_pct: Maximum drawdown percentage
+            
+        Returns:
+            Calmar ratio, or 0 if drawdown is 0
+        """
+        if max_drawdown_pct == 0:
+            return 0.0
+        return total_return_pct / abs(max_drawdown_pct)
+    
+    @staticmethod
+    def sortino_ratio(returns: pd.Series, risk_free_rate: float = 0.02) -> float:
+        """
+        Calculate Sortino Ratio (return to downside deviation).
+        
+        Args:
+            returns: Series of returns
+            risk_free_rate: Annual risk-free rate
+            
+        Returns:
+            Sortino ratio
+        """
+        if len(returns) < 2:
+            return 0.0
+        
+        # Convert to daily if needed
+        # Assuming daily returns for now
+        annual_factor = np.sqrt(252)  # Daily to annual
+        
+        # Calculate downside deviation
+        downside_returns = returns[returns < 0]
+        if len(downside_returns) == 0:
+            return float('inf')  # No downside risk
+        
+        downside_std = downside_returns.std()
+        if downside_std == 0:
+            return float('inf')
+        
+        # Annualized metrics
+        avg_return = returns.mean() * 252  # Annualized return
+        downside_deviation = downside_std * annual_factor
+        
+        # Sortino ratio
+        sortino = (avg_return - risk_free_rate) / downside_deviation
+        
+        return sortino
+    
+    @staticmethod
+    def value_at_risk(returns: pd.Series, confidence_level: float = 0.95) -> float:
+        """
+        Calculate Value at Risk (VaR).
+        
+        Args:
+            returns: Series of returns
+            confidence_level: Confidence level (e.g., 0.95 for 95%)
+            
+        Returns:
+            VaR at specified confidence level (negative = loss)
+        """
+        if len(returns) < 10:
+            return 0.0
+        
+        # Historical VaR
+        var = np.percentile(returns, (1 - confidence_level) * 100)
+        
+        return var
+    
+    @staticmethod
+    def expected_shortfall(returns: pd.Series, confidence_level: float = 0.95) -> float:
+        """
+        Calculate Expected Shortfall (CVaR).
+        
+        Args:
+            returns: Series of returns
+            confidence_level: Confidence level
+            
+        Returns:
+            Expected shortfall
+        """
+        if len(returns) < 10:
+            return 0.0
+        
+        var = PerformanceMetrics.value_at_risk(returns, confidence_level)
+        # Average of returns worse than VaR
+        tail_returns = returns[returns <= var]
+        
+        if len(tail_returns) == 0:
+            return var
+        
+        return tail_returns.mean()
+    
+    @staticmethod
+    def ulcer_index(equity: pd.Series, period: int = 14) -> float:
+        """
+        Calculate Ulcer Index (measure of downside risk).
+        
+        Args:
+            equity: Series of equity values
+            period: Lookback period for peak
+            
+        Returns:
+            Ulcer Index
+        """
+        if len(equity) < period:
+            return 0.0
+        
+        # Calculate drawdown from highest peak in period
+        drawdowns = []
+        for i in range(period, len(equity)):
+            period_high = equity.iloc[i-period:i].max()
+            drawdown = (equity.iloc[i] - period_high) / period_high
+            drawdowns.append(drawdown ** 2)  # Square for ulcer index
+        
+        if not drawdowns:
+            return 0.0
+        
+        ulcer = np.sqrt(np.mean(drawdowns))
+        
+        return ulcer
+    
+    @staticmethod
+    def recovery_factor(total_return: float, max_drawdown: float) -> float:
+        """
+        Calculate Recovery Factor (return per unit of drawdown).
+        
+        Args:
+            total_return: Total return amount
+            max_drawdown: Maximum drawdown amount
+            
+        Returns:
+            Recovery factor
+        """
+        if max_drawdown == 0:
+            return float('inf') if total_return > 0 else 0.0
+        
+        return total_return / abs(max_drawdown)
+    
+    @staticmethod
+    def risk_of_ruin(
+        win_rate: float,
+        avg_win: float,
+        avg_loss: float,
+        risk_per_trade: float
+    ) -> float:
+        """
+        Calculate Risk of Ruin probability.
+        
+        Args:
+            win_rate: Probability of winning
+            avg_win: Average win amount
+            avg_loss: Average loss amount
+            risk_per_trade: Risk amount per trade
+            
+        Returns:
+            Probability of ruin (0-1)
+        """
+        if win_rate <= 0 or win_rate >= 1:
+            return 0.0
+        
+        # Simplified risk of ruin calculation
+        p = win_rate
+        q = 1 - p
+        avg_win_ratio = avg_win / risk_per_trade
+        avg_loss_ratio = abs(avg_loss) / risk_per_trade
+        
+        # Avoid division by zero
+        if avg_loss_ratio == 0:
+            return 0.0
+        
+        # Risk of ruin formula
+        try:
+            A = (1 - p) / p
+            ruin_prob = ((1 - A ** avg_win_ratio) / (1 - A ** (avg_win_ratio + avg_loss_ratio)))
+            ruin_prob = max(0.0, min(1.0, ruin_prob))
+        except (ZeroDivisionError, ValueError):
+            ruin_prob = 0.0
+        
+        return ruin_prob
+    
+    @staticmethod
+    def kelly_criterion(win_rate: float, win_loss_ratio: float, capped: bool = True) -> float:
+        """
+        Calculate Kelly Criterion optimal bet size.
+        
+        Args:
+            win_rate: Probability of winning
+            win_loss_ratio: Ratio of average win to average loss
+            
+        Returns:
+            Kelly percentage (0-1)
+        """
+        if win_loss_ratio <= 0:
+            return 0.0
+        
+        kelly = win_rate - ((1 - win_rate) / win_loss_ratio)
+        
+        if capped:
+            return max(0.0, min(0.25, kelly))
+        return kelly
+    
+    @staticmethod
+    def calculate_all_advanced_metrics(
+        trades: List,
+        equity_series: pd.Series,
+        returns_series: pd.Series
+    ) -> dict:
+        """
+        Calculate all advanced performance metrics.
+        
+        Args:
+            trades: List of Trade objects
+            equity_series: Series of equity values over time
+            returns_series: Series of returns
+            
+        Returns:
+            Dictionary with all advanced metrics
+        """
+        if len(trades) == 0 or len(equity_series) < 2:
+            return {}
+        
+        # Basic metrics needed for calculations
+        total_return = sum(t.pnl for t in trades)
+        total_return_pct = (equity_series.iloc[-1] - equity_series.iloc[0]) / equity_series.iloc[0] * 100
+        
+        # Max drawdown
+        max_dd, _, _, _ = PerformanceMetrics.max_drawdown(equity_series)
+        
+        # Win rate and averages
+        win_rate = PerformanceMetrics.win_rate(trades)
+        winning_trades = [t for t in trades if t.is_winner]
+        losing_trades = [t for t in trades if not t.is_winner]
+        
+        avg_win = np.mean([t.pnl for t in winning_trades]) if winning_trades else 0
+        avg_loss = np.mean([t.pnl for t in losing_trades]) if losing_trades else 0
+        win_loss_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else float('inf')
+        
+        # Calculate all advanced metrics
+        metrics = {
+            'calmar_ratio': PerformanceMetrics.calmar_ratio(total_return_pct, max_dd),
+            'sortino_ratio': PerformanceMetrics.sortino_ratio(returns_series),
+            'value_at_risk_95': PerformanceMetrics.value_at_risk(returns_series, 0.95),
+            'expected_shortfall_95': PerformanceMetrics.expected_shortfall(returns_series, 0.95),
+            'ulcer_index': PerformanceMetrics.ulcer_index(equity_series),
+            'recovery_factor': PerformanceMetrics.recovery_factor(total_return, max_dd),
+            'risk_of_ruin': PerformanceMetrics.risk_of_ruin(
+                win_rate, avg_win, avg_loss, abs(avg_loss) if avg_loss != 0 else 1.0
+            ),
+            'kelly_criterion': PerformanceMetrics.kelly_criterion(win_rate, win_loss_ratio),
+            'gain_to_pain_ratio': total_return / abs(sum(t.pnl for t in losing_trades)) if losing_trades else float('inf'),
+            'profit_per_day': total_return / (len(equity_series) / 24) if len(equity_series) > 0 else 0,  # Assuming hourly data
+        }
+        
+        return metrics
 
 
 def main():

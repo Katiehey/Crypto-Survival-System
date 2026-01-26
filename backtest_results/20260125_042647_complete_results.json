@@ -1,0 +1,203 @@
+{
+  "metadata": {
+    "timestamp": "20260125_042647",
+    "strategy": "SimpleTrendStrategy",
+    "initial_capital": 500,
+    "data_points": 5000,
+    "period": "2025-12-23 18:00:00 to 2026-01-24 16:00:00",
+    "slippage": 0.001,
+    "fee_rate": 0.00075
+  },
+  "basic_metrics": {
+    "final_capital": 498.8307444425341,
+    "total_return": -1.169255557465874,
+    "total_return_pct": -0.23385111149317483,
+    "total_trades": 3,
+    "win_rate": 0.3333333333333333,
+    "profit_factor": 0.14716577608231549,
+    "expectancy": -0.38975185248862704,
+    "sharpe_ratio": 0.0
+  },
+  "risk_metrics": {
+    "max_drawdown": 0.0,
+    "largest_win": 0.20176770200727245,
+    "largest_loss": -0.7661992011709494,
+    "avg_win": 0.20176770200727245,
+    "avg_loss": -0.6855116297365769,
+    "avg_trade": -0.38975185248862704,
+    "win_loss_ratio": 0.29433155216463097,
+    "max_consecutive_wins": 0,
+    "max_consecutive_losses": 0
+  },
+  "advanced_metrics": {
+    "calmar_ratio": -100.0,
+    "sortino_ratio": -59.530710453293686,
+    "value_at_risk_95": 0.0,
+    "expected_shortfall_95": 0.0,
+    "ulcer_index": 0.0,
+    "recovery_factor": -500.000000000003,
+    "risk_of_ruin": 0.15579751065558392,
+    "kelly_criterion": 0.0,
+    "gain_to_pain_ratio": -0.8528342239176845,
+    "profit_per_day": -7.015533344795287
+  },
+  "equity_curve": {
+    "peak_capital": 500.0,
+    "current_drawdown_pct": -0.23385111149317483,
+    "max_drawdown_pct": 0.23385111149317483,
+    "volatility_pct": 0.10379006941599642,
+    "winning_periods": 1,
+    "losing_periods": 2
+  },
+  "regime_analysis": {
+    "by_entry_regime": {
+      "trend": {
+        "trades": 3,
+        "wins": 1,
+        "losses": 2,
+        "total_pnl": -1.1692555574658812,
+        "winning_pnl": 0.20176770200727245,
+        "losing_pnl": -1.3710232594731537,
+        "largest_win": 0.20176770200727245,
+        "largest_loss": -0.7661992011709494,
+        "avg_trade_duration": 0.0,
+        "durations": [
+          1.0,
+          6.0,
+          6.0
+        ],
+        "win_rate": 0.3333333333333333,
+        "avg_pnl": -0.38975185248862704,
+        "avg_win": 0.20176770200727245,
+        "avg_loss": -0.6855116297365769,
+        "avg_duration": 4.333333333333333,
+        "median_duration": 6.0,
+        "profit_factor": 0.14716577608231549,
+        "expectancy": -0.38975185248862715
+      }
+    },
+    "by_exit_regime": {
+      "no_trade": {
+        "trades": 2,
+        "wins": 0,
+        "losses": 2,
+        "total_pnl": -1.3710232594731537,
+        "winning_pnl": 0.0,
+        "losing_pnl": -1.3710232594731537,
+        "largest_win": -Infinity,
+        "largest_loss": -0.7661992011709494,
+        "avg_trade_duration": 0.0,
+        "durations": [
+          1.0,
+          6.0
+        ],
+        "win_rate": 0.0,
+        "avg_pnl": -0.6855116297365769,
+        "avg_win": 0.0,
+        "avg_loss": -0.6855116297365769,
+        "avg_duration": 3.5,
+        "median_duration": 6.0,
+        "profit_factor": 0.0,
+        "expectancy": -0.6855116297365769
+      },
+      "trend": {
+        "trades": 1,
+        "wins": 1,
+        "losses": 0,
+        "total_pnl": 0.20176770200727245,
+        "winning_pnl": 0.20176770200727245,
+        "losing_pnl": 0.0,
+        "largest_win": 0.20176770200727245,
+        "largest_loss": Infinity,
+        "avg_trade_duration": 0.0,
+        "durations": [
+          6.0
+        ],
+        "win_rate": 1.0,
+        "avg_pnl": 0.20176770200727245,
+        "avg_win": 0.20176770200727245,
+        "avg_loss": 0.0,
+        "avg_duration": 6.0,
+        "median_duration": 6.0,
+        "profit_factor": Infinity,
+        "expectancy": 0.20176770200727245
+      }
+    },
+    "by_regime_transition": {
+      "trend\u2192no_trade": {
+        "trades": 2,
+        "wins": 0,
+        "losses": 2,
+        "total_pnl": -1.3710232594731537,
+        "winning_pnl": 0.0,
+        "losing_pnl": -1.3710232594731537,
+        "largest_win": -Infinity,
+        "largest_loss": -0.7661992011709494,
+        "avg_trade_duration": 0.0,
+        "durations": [
+          1.0,
+          6.0
+        ],
+        "win_rate": 0.0,
+        "avg_pnl": -0.6855116297365769,
+        "avg_win": 0.0,
+        "avg_loss": -0.6855116297365769,
+        "avg_duration": 3.5,
+        "median_duration": 6.0,
+        "profit_factor": 0.0,
+        "expectancy": -0.6855116297365769
+      },
+      "trend\u2192trend": {
+        "trades": 1,
+        "wins": 1,
+        "losses": 0,
+        "total_pnl": 0.20176770200727245,
+        "winning_pnl": 0.20176770200727245,
+        "losing_pnl": 0.0,
+        "largest_win": 0.20176770200727245,
+        "largest_loss": Infinity,
+        "avg_trade_duration": 0.0,
+        "durations": [
+          6.0
+        ],
+        "win_rate": 1.0,
+        "avg_pnl": 0.20176770200727245,
+        "avg_win": 0.20176770200727245,
+        "avg_loss": 0.0,
+        "avg_duration": 6.0,
+        "median_duration": 6.0,
+        "profit_factor": Infinity,
+        "expectancy": 0.20176770200727245
+      }
+    },
+    "overall": {
+      "trades": 3,
+      "wins": 1,
+      "losses": 2,
+      "total_pnl": -1.1692555574658812,
+      "winning_pnl": 0.20176770200727245,
+      "losing_pnl": -1.3710232594731537,
+      "largest_win": 0.20176770200727245,
+      "largest_loss": -0.7661992011709494,
+      "avg_trade_duration": 0.0,
+      "durations": [
+        1.0,
+        6.0,
+        6.0
+      ],
+      "win_rate": 0.3333333333333333,
+      "avg_pnl": -0.38975185248862704,
+      "avg_win": 0.20176770200727245,
+      "avg_loss": -0.6855116297365769,
+      "avg_duration": 4.333333333333333,
+      "median_duration": 6.0,
+      "profit_factor": 0.14716577608231549,
+      "expectancy": -0.38975185248862715
+    }
+  },
+  "files": {
+    "plots_directory": "backtest_results/plots/20260125_042647",
+    "equity_data": "backtest_results/20260125_042647_equity.csv",
+    "trades_data": "backtest_results/20260125_042647_trades.csv"
+  }
+}

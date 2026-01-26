@@ -1,0 +1,157 @@
+{
+  "metadata": {
+    "timestamp": "20260125_052601",
+    "strategy": "SimpleTrendStrategy",
+    "initial_capital": 500,
+    "data_points": 5000,
+    "period": "2025-07-01 05:00:00 to 2026-01-25 12:00:00",
+    "slippage": 0.001,
+    "fee_rate": 0.00075
+  },
+  "basic_metrics": {
+    "final_capital": 498.42652224408977,
+    "total_return": -1.5734777559102326,
+    "total_return_pct": -0.3146955511820465,
+    "total_trades": 2,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "expectancy": -0.7867388779551214,
+    "sharpe_ratio": 0.0
+  },
+  "risk_metrics": {
+    "max_drawdown": 0.0,
+    "largest_win": -0.3814892196957894,
+    "largest_loss": -1.1919885362144536,
+    "avg_win": 0.0,
+    "avg_loss": -0.7867388779551214,
+    "avg_trade": -0.7867388779551214,
+    "win_loss_ratio": 0.0,
+    "max_consecutive_wins": 0,
+    "max_consecutive_losses": 0
+  },
+  "advanced_metrics": {
+    "calmar_ratio": -100.0,
+    "sortino_ratio": -22.929385300894115,
+    "value_at_risk_95": 0.0,
+    "expected_shortfall_95": 0.0,
+    "ulcer_index": 0.0,
+    "recovery_factor": -500.00000000000324,
+    "risk_of_ruin": 0.0,
+    "kelly_criterion": 0.0,
+    "gain_to_pain_ratio": -1.0,
+    "profit_per_day": -12.587822047281943
+  },
+  "equity_curve": {
+    "peak_capital": 500.0,
+    "current_drawdown_pct": -0.3146955511820465,
+    "max_drawdown_pct": 0.3146955511820465,
+    "volatility_pct": 0.11449298793181509,
+    "winning_periods": 0,
+    "losing_periods": 2
+  },
+  "regime_analysis": {
+    "by_entry_regime": {
+      "trend": {
+        "trades": 2,
+        "wins": 0,
+        "losses": 2,
+        "total_pnl": -1.5734777559102429,
+        "winning_pnl": 0.0,
+        "losing_pnl": -1.5734777559102429,
+        "largest_win": -Infinity,
+        "largest_loss": -1.1919885362144536,
+        "avg_trade_duration": 0.0,
+        "durations": [
+          8.0,
+          6.0
+        ],
+        "win_rate": 0.0,
+        "avg_pnl": -0.7867388779551214,
+        "avg_win": 0.0,
+        "avg_loss": -0.7867388779551214,
+        "avg_duration": 7.0,
+        "median_duration": 8.0,
+        "profit_factor": 0.0,
+        "expectancy": -0.7867388779551214
+      }
+    },
+    "by_exit_regime": {
+      "chaos": {
+        "trades": 2,
+        "wins": 0,
+        "losses": 2,
+        "total_pnl": -1.5734777559102429,
+        "winning_pnl": 0.0,
+        "losing_pnl": -1.5734777559102429,
+        "largest_win": -Infinity,
+        "largest_loss": -1.1919885362144536,
+        "avg_trade_duration": 0.0,
+        "durations": [
+          8.0,
+          6.0
+        ],
+        "win_rate": 0.0,
+        "avg_pnl": -0.7867388779551214,
+        "avg_win": 0.0,
+        "avg_loss": -0.7867388779551214,
+        "avg_duration": 7.0,
+        "median_duration": 8.0,
+        "profit_factor": 0.0,
+        "expectancy": -0.7867388779551214
+      }
+    },
+    "by_regime_transition": {
+      "trend\u2192chaos": {
+        "trades": 2,
+        "wins": 0,
+        "losses": 2,
+        "total_pnl": -1.5734777559102429,
+        "winning_pnl": 0.0,
+        "losing_pnl": -1.5734777559102429,
+        "largest_win": -Infinity,
+        "largest_loss": -1.1919885362144536,
+        "avg_trade_duration": 0.0,
+        "durations": [
+          8.0,
+          6.0
+        ],
+        "win_rate": 0.0,
+        "avg_pnl": -0.7867388779551214,
+        "avg_win": 0.0,
+        "avg_loss": -0.7867388779551214,
+        "avg_duration": 7.0,
+        "median_duration": 8.0,
+        "profit_factor": 0.0,
+        "expectancy": -0.7867388779551214
+      }
+    },
+    "overall": {
+      "trades": 2,
+      "wins": 0,
+      "losses": 2,
+      "total_pnl": -1.5734777559102429,
+      "winning_pnl": 0.0,
+      "losing_pnl": -1.5734777559102429,
+      "largest_win": -Infinity,
+      "largest_loss": -1.1919885362144536,
+      "avg_trade_duration": 0.0,
+      "durations": [
+        8.0,
+        6.0
+      ],
+      "win_rate": 0.0,
+      "avg_pnl": -0.7867388779551214,
+      "avg_win": 0.0,
+      "avg_loss": -0.7867388779551214,
+      "avg_duration": 7.0,
+      "median_duration": 8.0,
+      "profit_factor": 0.0,
+      "expectancy": -0.7867388779551214
+    }
+  },
+  "files": {
+    "plots_directory": "backtest_results/plots/20260125_052601",
+    "equity_data": "backtest_results/20260125_052601_equity.csv",
+    "trades_data": "backtest_results/20260125_052601_trades.csv"
+  }
+}

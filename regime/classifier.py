@@ -41,8 +41,8 @@ class RegimeClassifier:
     
     # --- HYSTERESIS THRESHOLDS (The "Sticky" Logic) ---
     # TREND: Need 0.65 to start, but only 0.50 to stay in it.
-    ER_TREND_ENTRY = 0.65      
-    ER_TREND_HOLD  = 0.50      
+    ER_TREND_ENTRY = 0.45    
+    ER_TREND_HOLD  = 0.35     
     
     # RANGE: Need < 0.30 to enter, but stays range up to 0.40.
     ER_RANGE_ENTRY = 0.30     
@@ -50,7 +50,7 @@ class RegimeClassifier:
     
     ATR_HIGH_PERCENTILE = 60              
     ATR_LOW_PERCENTILE = 40               
-    VOLUME_LOW_PERCENTILE = 20            
+    VOLUME_LOW_PERCENTILE = 10            
     MIN_CONFIDENCE_TRADABLE = 0.4         
 
     def __init__(self):

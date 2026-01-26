@@ -262,6 +262,10 @@ class BacktestEngine:
             
             if signal.signal_type == SignalType.LONG:
                 self._open_position(candle, signal)
+            elif signal.reason and "Waiting" not in signal.reason:
+                # This will print "Filtered" reasons but ignore "Waiting for data"
+                if self.current_index % 100 == 0: # Only every 100 candles to avoid spam
+                    print(f"DEBUG [Row {self.current_index}]: Strategy says NO: {signal.reason}")
     
     def _open_position(self, candle: pd.Series, signal) -> None:
         """
@@ -285,7 +289,7 @@ class BacktestEngine:
         )
         
         if not position_calc.is_valid:
-            logger.debug(f"Position rejected: {position_calc.reason}")
+            logger.warning(f"Position rejected: {position_calc.reason}")
             return
         
         # Validate trade through risk engine
@@ -296,7 +300,7 @@ class BacktestEngine:
         )
         
         if not is_valid:
-            logger.debug(f"Trade rejected: {reason}")
+            logger.warning(f"Trade rejected: {reason}")
             return
         
         # Create position

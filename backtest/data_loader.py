@@ -275,7 +275,7 @@ def main():
     
     # Load recent data
     print("\n📥 Loading data (last 1000 candles)...")
-    df = loader.load_and_prepare(limit=1000)
+    df = loader.load_and_prepare(limit=5000)
     
     print(f"✅ Loaded and prepared {len(df)} candles")
     

@@ -1,0 +1,2 @@
+trade_id,entry_time,entry_price,entry_regime,exit_time,exit_price,exit_regime,exit_reason,size,side,pnl,pnl_percent,fees_paid,duration_hours,is_winner,mfe,mae
+BT_0000,2025-12-28T20:00:00,87602.27475999999,trend,2026-01-24T16:00:00,89082.25856999999,no_trade,end_of_data,227.50000000000293,long,3.502215454492328,1.5394353646119925,0.3412500000000044,644.0,True,10322.21524000002,795.7747599999857
