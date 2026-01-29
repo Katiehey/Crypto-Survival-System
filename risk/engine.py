@@ -119,13 +119,20 @@ class RiskEngine:
         self,
         entry_price: float,
         stop_loss_price: float,
-        risk_percent: Optional[float] = None
+        risk_percent: Optional[float] = None,
+        regime: str = "trend"
     ) -> PositionSize:
         """Calculate position size and validate against all risk limits."""
         
         # Use default risk if not specified
         if risk_percent is None:
             risk_percent = RISK_LIMITS.MAX_RISK_PER_TRADE
+
+        # 🧠 REGIME-BASED RISK SCALING
+        # If the market is in 'chaos', we cut our risk in half to preserve capital
+        if regime == 'chaos':
+            risk_percent = risk_percent * 0.5
+            logger.info(f"🛡️ Chaos detected: Scaling risk down to {risk_percent*100:.2f}%")
         
         # 1. Price/Input Validation
         valid_input, reason = self._validate_inputs(entry_price, stop_loss_price, risk_percent)
@@ -204,53 +211,32 @@ class RiskEngine:
             (is_approved, reason)
         """
         # Check if date changed (reset daily counters)
-        self._check_date_rollover()
+        self._check_date_rollover(current_time)
         
         # Gate 1: Per-trade risk limit
         if risk_percent > RISK_LIMITS.MAX_RISK_PER_TRADE:
-            return False, (
-                f"Risk {risk_percent*100:.2f}% exceeds per-trade limit "
-                f"{RISK_LIMITS.MAX_RISK_PER_TRADE*100:.2f}%"
-            )
+            return False, f"Risk {risk_percent*100:.2f}% exceeds limit"
         
-        # Gate 2: Cooldown period check
-        if False and self.state.is_in_cooldown():
-            time_remaining = self.state.cooldown_until - datetime.now()
-            hours_remaining = time_remaining.total_seconds() / 3600
-            return False, (
-                f"Cooldown period active. "
-                f"{hours_remaining:.1f} hours remaining until "
-                f"{self.state.cooldown_until.strftime('%Y-%m-%d %H:%M')}"
-            )
+        # Gate 2: Cooldown period check (NOW ACTIVE)
+        if self.state.is_in_cooldown(current_time):
+            return False, "Cooldown period active after loss streak."
         
-        # Gate 3: Daily loss limit
-        if False and self.state.daily_trade_count >= RISK_LIMITS.MAX_DAILY_TRADES:
-            return False, (
-                f"Daily loss limit reached: "
-                f"R{self.state.daily_loss:.2f} / "
-                f"R{self.capital * RISK_LIMITS.MAX_DAILY_LOSS:.2f}"
-            )
+        # Gate 3: Daily loss limit (NOW ACTIVE)
+        max_loss = self.capital * RISK_LIMITS.MAX_DAILY_LOSS
+        if self.state.daily_loss >= max_loss:
+            return False, f"Daily loss limit reached (R{self.state.daily_loss:.2f})"
         
-        # Gate 4: Daily trade limit
-        if False and self.state.trades_today >= RISK_LIMITS.MAX_DAILY_TRADES:
-            return False, (
-                f"Daily trade limit reached: "
-                f"{self.state.trades_today} / {RISK_LIMITS.MAX_TRADES_PER_DAY}"
-            )
+        # Gate 4: Daily trade limit (NOW ACTIVE)
+        if self.state.trades_today >= RISK_LIMITS.MAX_TRADES_PER_DAY:
+            return False, f"Max daily trades ({RISK_LIMITS.MAX_TRADES_PER_DAY}) reached."
         
-        # Gate 5: Consecutive loss limit
-        if False and self.state.consecutive_losses >= RISK_LIMITS.MAX_CONSECUTIVE_LOSSES:
-            return False, (
-                f"Consecutive loss limit reached: "
-                f"{self.state.consecutive_losses} losses in a row. "
-                f"Cooldown period required."
-            )
+        # Gate 5: Consecutive loss limit (NOW ACTIVE)
+        if self.state.consecutive_losses >= RISK_LIMITS.MAX_CONSECUTIVE_LOSSES:
+            return False, f"Stopped: {self.state.consecutive_losses} consecutive losses."
         
-        # Gate 6: Kill switch
-        if False and self.state.kill_switch_active:
-            return False, (
-                f"Kill switch ACTIVE: {self.state.kill_switch_reason}"
-            )
+        # Gate 6: Kill switch (NOW ACTIVE)
+        if self.state.kill_switch_active:
+            return False, f"Kill switch ACTIVE: {self.state.kill_switch_reason}"
         
         # Additional sanity checks
         if position_size <= 0:

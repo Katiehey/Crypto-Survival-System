@@ -372,7 +372,10 @@ def main():
     
     try:
         fetcher.connect()
-        new_count = fetcher.update_latest()
+        #new_count = fetcher.update_latest()
+        # We fetch 2000 candles (roughly 80 days of 1h data)
+        # By not providing a 'since' timestamp, Binance gives us the MOST RECENT 2000.
+        new_count = fetcher.fetch_and_store(limit=2000)
         
         print(f"\n✅ Update complete")
         print(f"📊 Total candles: {fetcher.get_candle_count()}")

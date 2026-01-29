@@ -6,6 +6,8 @@ Runs backtest and displays all performance metrics.
 
 import sys
 import os
+import json
+import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datetime import datetime
@@ -90,46 +92,61 @@ def main():
     if hasattr(result, 'regime_stats') and result.regime_stats:
         print(f"\n🎭 REGIME ANALYSIS")
         for regime, stats in result.regime_stats.items():
-            print(f"   {regime.upper():10s}: {stats['trades']} trades, "
-                  f"Win Rate: {stats['win_rate']:.1%}, "
-                  f"Avg PnL: R{stats['avg_pnl']:+.2f}")
+            # 1. Extract Win Rate safely
+            wr_data = stats.get('win_rate', 0)
+            win_rate_val = wr_data.get('overall', 0) if isinstance(wr_data, dict) else wr_data
+            
+            # 2. Extract Avg PnL safely
+            pnl_data = stats.get('avg_pnl', 0)
+            pnl_val = pnl_data.get('overall', 0) if isinstance(pnl_data, dict) else pnl_data
+
+            print(f"   {regime.upper():10s}: {stats.get('trades', 0)} trades, "
+                  f"Win Rate: {win_rate_val:.1%}, "
+                  f"Avg PnL: R{pnl_val:+.2f}")
     
     # Export results
     print(f"\n💾 EXPORT")
-    print(f"   Results saved to: backtest_results/{datetime.now().strftime('%Y%m%d_%H%M%S')}_results.json")
+    export_dir = "backtest_results"
+    if not os.path.exists(export_dir):
+        os.makedirs(export_dir)
     
-    # Summary
-    print(f"\n" + "=" * 70)
-    print("SUMMARY")
-    print("=" * 70)
-    
-    if result.total_return_pct > 0:
-        print(f"✅ POSITIVE EXPECTANCY: +{result.total_return_pct:.2f}%")
-    else:
-        print(f"❌ NEGATIVE EXPECTANCY: {result.total_return_pct:.2f}%")
-    
-    if result.win_rate > 0.5:
-        print(f"✅ Good win rate: {result.win_rate:.1%}")
-    else:
-        print(f"⚠️  Low win rate: {result.win_rate:.1%}")
-    
-    if result.profit_factor > 1.5:
-        print(f"✅ Strong profit factor: {result.profit_factor:.2f}")
-    elif result.profit_factor > 1.0:
-        print(f"⚠️  Marginal profit factor: {result.profit_factor:.2f}")
-    else:
-        print(f"❌ Poor profit factor: {result.profit_factor:.2f}")
-    
-    if result.max_drawdown < 10:
-        print(f"✅ Acceptable drawdown: {result.max_drawdown:.2f}%")
-    elif result.max_drawdown < 20:
-        print(f"⚠️  High drawdown: {result.max_drawdown:.2f}%")
-    else:
-        print(f"❌ Excessive drawdown: {result.max_drawdown:.2f}%")
-    
-    print(f"\n" + "=" * 70)
-    print("Backtest complete!")
-    print("=" * 70)
+    # We'll save as 'metrics.json' so your reproduce script finds it immediately, 
+    # but also a timestamped version for your history.
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename = f"{timestamp}_results.json"
+    filepath = os.path.join(export_dir, filename)
+    latest_path = os.path.join(export_dir, "metrics.json")
+
+    serializable_trades = []
+    for t in result.trades:
+        if hasattr(t, 'to_dict'):
+            serializable_trades.append(t.to_dict())
+        else:
+            # Fallback: manual dict creation
+            serializable_trades.append({
+                'entry_price': getattr(t, 'entry_price', 0),
+                'exit_price': getattr(t, 'exit_price', 0),
+                'pnl': getattr(t, 'pnl', 0),
+                'pnl_pct': getattr(t, 'pnl_pct', 0),
+                'regime': getattr(t, 'regime', 'unknown'),
+                'is_winner': getattr(t, 'is_winner', False),
+                'duration': getattr(t, 'duration', 1)
+            })
+
+    # Helper to convert result object to a serializable dictionary
+    # We exclude the raw dataframes if they exist to keep the JSON small
+    export_data = {k: v for k, v in result.__dict__.items() if not isinstance(v, (pd.DataFrame, pd.Series))}
+    export_data['trades'] = serializable_trades
+    try:
+        with open(filepath, 'w') as f:
+            json.dump(export_data, f, indent=4, default=str)
+        # Create a copy as metrics.json for the report script
+        with open(latest_path, 'w') as f:
+            json.dump(export_data, f, indent=4, default=str)
+        print(f"   Results saved to: {filepath}")
+        print(f"   Report source updated: {latest_path}")
+    except Exception as e:
+        print(f"   ❌ Export failed: {e}")
 
 
 if __name__ == "__main__":

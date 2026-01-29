@@ -47,6 +47,7 @@ class TradingSignal:
     confidence: float
     entry_price: float
     stop_loss: Optional[float] = None
+    size: float = 0.0
     take_profit: Optional[float] = None
     regime: Optional[str] = None
     reason: str = ""

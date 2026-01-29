@@ -16,6 +16,8 @@ import numpy as np
 from datetime import datetime
 from scipy import stats
 
+from backtest import equity_curve
+from backtest import equity_curve
 from backtest.trade import Trade
 
 
@@ -90,34 +92,38 @@ class PerformanceMetrics:
             >>> equity = pd.Series([100, 110, 105, 95, 100, 115])
             >>> max_dd, duration, start, end = PerformanceMetrics.max_drawdown(equity)
         """
-        if equity_curve.empty:
-            return 0.0, None, None, 0
-            
-        # 1. Use values to avoid Timestamp vs Int comparison issues
-        values = equity_curve.values
-        rolling_max = np.maximum.accumulate(values)
-        
-        # Avoid division by zero
-        drawdowns = np.where(rolling_max > 0, (rolling_max - values) / rolling_max, 0.0)
-        
-        max_dd = np.max(drawdowns)
-        max_dd_pos = np.argmax(drawdowns)
-        
-        # 2. If no drawdown exists, return zeros
-        if max_dd <= 0:
-            return 0.0, equity_curve.index[0], equity_curve.index[0], 0
+        # 1. Extract values safely
+        if isinstance(equity_curve, pd.DataFrame) and 'capital' in equity_curve.columns:
+            values = equity_curve['capital'].values
+            index = equity_curve.index
+        else:
+            values = equity_curve.values
+            index = equity_curve.index
 
-        # 3. Find the peak that preceded this drawdown
+        if len(values) == 0:
+            return 0.0, 0, None, None
+    
+    # 2. Calculate drawdown array
+        rolling_max = np.maximum.accumulate(values)
+    # Avoid division by zero if capital ever hits 0
+        drawdowns = np.where(rolling_max > 0, (rolling_max - values) / rolling_max, 0.0)
+    
+        max_dd_pct = np.max(drawdowns) * 100  # Result is e.g. 5.4%
+        max_dd_pos = np.argmax(drawdowns)
+    
+        if max_dd_pct <= 0:
+            return 0.0, 0, index[0], index[0]
+
+    # 3. Find the peak that preceded the max drawdown
         peak_pos = np.argmax(values[:max_dd_pos + 1])
-        
-        # Map positions back to actual Timestamps/Indices
-        max_dd_idx = equity_curve.index[max_dd_pos]
-        peak_idx = equity_curve.index[peak_pos]
-        
-        # Calculate duration (number of periods)
-        duration = max_dd_pos - peak_pos
-        
-        return float(max_dd), peak_idx, max_dd_idx, int(duration)
+    
+        peak_idx = index[peak_pos]
+        end_idx = index[max_dd_pos]
+    
+    # Calculate duration (number of periods)
+        duration = int(max_dd_pos - peak_pos)
+    
+        return float(max_dd_pct), duration, peak_idx, end_idx
     
     @staticmethod
     def profit_factor(trades: List[Trade]) -> float:
@@ -212,8 +218,12 @@ class PerformanceMetrics:
         Returns:
             Series of period returns
         """
-        returns = equity_curve.pct_change()
-        return returns.fillna(0)
+        if 'capital' in equity_curve.columns:
+            returns = equity_curve['capital'].pct_change().dropna()
+        else:
+        # Fallback if it's already a Series
+            returns = equity_curve.pct_change().dropna()
+        return returns
     
     @staticmethod
     def total_return(initial: float, final: float) -> Tuple[float, float]:
@@ -354,6 +364,8 @@ class PerformanceMetrics:
             'max_consecutive_wins': max_wins,
             'max_consecutive_losses': max_losses,
             'total_trades': len(trades),
+            'largest_win': max([t.pnl for t in trades if t.is_winner] or [0.0]),
+            'largest_loss': min([t.pnl for t in trades if not t.is_winner] or [0.0]),
         }
     
     @staticmethod

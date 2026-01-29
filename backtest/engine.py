@@ -147,6 +147,7 @@ class BacktestEngine:
         self.capital = initial_capital
         self.current_position: Optional[Position] = None
         self.trades: List[Trade] = []
+        self.equity_history: List[dict] = []
         
         # Data
         self.data: Optional[pd.DataFrame] = None
@@ -190,6 +191,11 @@ class BacktestEngine:
             candle = self.data.iloc[idx]
             
             self._process_candle(candle)
+
+            self.equity_history.append({
+                'timestamp': candle['datetime'],
+                'capital': self.capital
+            })
         
         # Close any open position at end
         if self.current_position is not None:
@@ -278,45 +284,42 @@ class BacktestEngine:
         # Apply slippage to entry
         entry_price = signal.entry_price * (1 + self.slippage)
         
-        # Use risk engine to calculate position size
-        # For backtest, we create a temporary risk engine
-        # (In practice, might want to maintain one risk engine instance)
-        
-        
+        # Determine the regime from the candle data
+        current_regime = candle.get('regime', 'trend')
+
+        # 1. Use the RiskEngine to calculate the SAFE size based on regime
+        # This will now automatically apply the 50% cut if regime == 'chaos'
         position_calc = self.risk_engine.calculate_position_size(
             entry_price=entry_price,
-            stop_loss_price=signal.stop_loss or (entry_price * 0.98)
+            stop_loss_price=signal.stop_loss or (entry_price * 0.98),
+            regime=current_regime  # <--- CRITICAL: Pass the regime here
         )
         
+        # 2. Safety Check: If RiskEngine rejects it (e.g. Daily Loss hit), don't trade
         if not position_calc.is_valid:
-            logger.warning(f"Position rejected: {position_calc.reason}")
+            if self.verbose:
+                logger.warning(f"Trade rejected by RiskEngine: {position_calc.reason}")
             return
+
+        # 3. Final size: Use the risk engine's calculated size
+        trade_size = position_calc.size
         
-        # Validate trade through risk engine
-        is_valid, reason = self.risk_engine.validate_trade(
-            position_calc.size,
-            position_calc.risk_amount,
-            position_calc.risk_percent
-        )
+        # Ensure we don't exceed available capital (brokerage buffer)
+        if trade_size > self.capital:
+             trade_size = self.capital * 0.95
         
-        if not is_valid:
-            logger.warning(f"Trade rejected: {reason}")
-            return
-        
-        # Create position
         self.current_position = Position(
             entry_time=candle['datetime'],
             entry_price=entry_price,
-            entry_regime=candle['regime'],
-            size=position_calc.size,
-            stop_loss=signal.stop_loss or (entry_price * 0.98),
+            entry_regime=current_regime,
+            size=trade_size,
+            stop_loss=position_calc.stop_distance_percent, # Better tracking
             side='long'
         )
         
         logger.info(
-            f"📈 LONG @ ${entry_price:.2f}, "
-            f"size=${position_calc.size:.2f}, "
-            f"stop=${self.current_position.stop_loss:.2f}"
+            f"📈 LONG @ ${entry_price:.2f} [{current_regime}], "
+            f"size=${trade_size:.2f}, risk={position_calc.risk_percent*100:.1f}%"
         )
     
     def _close_position(self, candle: pd.Series, reason: str) -> None:
@@ -359,7 +362,7 @@ class BacktestEngine:
         
         # Update capital
         self.capital += trade.pnl
-        self.risk_engine.record_trade(pnl=trade.pnl, risk_amount=self.current_position.size * 0.01)
+        self.risk_engine.record_trade(pnl=trade.pnl, risk_amount=self.current_position.size)
 
         # Record trade
         self.trades.append(trade)
@@ -391,12 +394,15 @@ class BacktestEngine:
         Returns:
             Complete BacktestResult
         """
+        equity_df = pd.DataFrame(self.equity_history)
+
         result = BacktestResult(
             start_date=self.data['datetime'].iloc[0],
             end_date=self.data['datetime'].iloc[-1],
             initial_capital=self.initial_capital,
             final_capital=self.capital,
-            trades=self.trades
+            trades=self.trades,
+            equity_curve=equity_df
         )
         
         return result

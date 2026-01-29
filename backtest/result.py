@@ -232,6 +232,31 @@ class BacktestResult:
         """Get Kelly Criterion percentage."""
         return self.advanced_metrics.get('kelly_criterion', 0.0)
 
+    def to_dict(self) -> dict:
+        """Convert result to dictionary for JSON serialization."""
+        return {
+            "parameters": {
+                "initial_capital": self.initial_capital,
+                "final_capital": self.final_capital,
+                "start_date": self.start_date.isoformat(),
+                "end_date": self.end_date.isoformat()
+            },
+            "basic": {
+                "total_return": self.total_return,
+                "total_return_pct": self.total_return_pct,
+                "max_drawdown": self.max_drawdown,
+                "sharpe_ratio": self.sharpe_ratio,
+                "win_rate": self.win_rate,
+                "profit_factor": self.profit_factor,
+                "expectancy": self.expectancy,
+                "total_trades": self.total_trades
+            },
+            "advanced": self.advanced_metrics,
+            "regime": self.regime_stats,
+            # This is the part that was likely missing!
+            "trades": [t.to_dict() if hasattr(t, 'to_dict') else t.__dict__ for t in self.trades]
+        }
+
     def get_summary(self) -> Dict:
         """Get summary statistics as dictionary."""
         return {
