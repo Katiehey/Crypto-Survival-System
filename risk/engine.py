@@ -147,6 +147,12 @@ class RiskEngine:
             return PositionSize(0.0, 0.0, risk_percent, 0.0, False, "Stop loss equals entry price")
         
         position_size = risk_amount / stop_distance_percent
+
+        max_capital_allowed = self.capital * RISK_LIMITS.MAX_POSITION_SIZE_PERCENT
+        
+        if position_size > max_capital_allowed:
+            logger.info(f"Sizing down: R{position_size:.2f} exceeds cap. Capping at R{max_capital_allowed:.2f}")
+            position_size = max_capital_allowed
         
         # NEW CHECK: Prevent leverage/position size exceeding total capital
         if position_size > self.capital:
