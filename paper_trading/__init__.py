@@ -273,14 +273,8 @@ class PaperTradingSystem:
                 price=current_price
             )
             
-            # FIX: Check result.success and ensure filled_size isn't zero
-            if execution.filled_size > 0:
-    # Success! Use ACTUAL data from the simulator result
-                final_size = execution.filled_size
-                final_price = execution.execution_price
-                final_fee = execution.fee
-            else:
-    # If filled_size is 0, it actually failed
+            # THE FIX: Trust the success boolean, not reason strings
+            if not execution.success:
                 logger.warning(f"❌ Execution failed: {execution.reason}")
                 return
 
@@ -469,28 +463,35 @@ class PaperTradingSystem:
     
     def _update_equity(self, current_price: float):
         """Update equity history."""
-        if not self.is_historical and hasattr(self, 'last_update_time'):
-         if self.current_time == self.last_update_time:
-             # Force clock forward 1 hour (or your timeframe)
-             self.current_time += timedelta(hours=1)
+        # 1. Handle Initialization of last_update_time
+        if not hasattr(self, 'last_update_time') or self.last_update_time is None:
+            self.last_update_time = self.current_time - timedelta(seconds=1)
+
+    # 2. Strict Increasing Check: If data provider is stuck or resets, force a step
+        if self.current_time <= self.last_update_time:
+        # Step forward by 1 hour (matching your system timeframe)
+            self.current_time = self.last_update_time + timedelta(hours=1)
     
         self.last_update_time = self.current_time
 
+    # 3. Calculate Valuation
         total_position_value = sum(
             p.size + p.current_pnl for p in self.open_positions
         )
-        
+    
         total_equity = self.current_capital + total_position_value
 
+    # 4. Sync Risk Engine
         self.risk_engine.capital = self.current_capital
-        
+    
+    # 5. Record History
         self.equity_history.append({
-            'timestamp': self.current_time,
-            'capital': total_equity,
-            'open_positions': len(self.open_positions),
-            'cash': self.current_capital,
-            'position_value': total_position_value
-        })
+        'timestamp': self.current_time,
+        'capital': total_equity,
+        'open_positions': len(self.open_positions),
+        'cash': self.current_capital,
+        'position_value': total_position_value
+    })
     
     def _simulate_time_delay(self):
         """Simulate time delay based on speed setting."""

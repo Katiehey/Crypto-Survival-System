@@ -110,9 +110,18 @@ class SimpleTrendStrategy(Strategy):
             if self.highest_price == 0 or close_price > self.highest_price:
                 self.highest_price = close_price
         
-        # Professional Trailing Stop
+            # 1. Calculate the Trailing Stop
             trail_stop = self.highest_price - (atr * self.stop_loss_atr_multiple)
-            self.active_stop = max(self.active_stop, trail_stop)
+    
+    # 2. BUFFER FIX: Ensure we only 'lock in' a stop that covers costs
+    # Total estimated cost (0.075% fee + 0.1% slip) * 2 = 0.35%
+            breakeven_price = self.entry_price * 1.004 
+    
+    # If we are in profit, try to keep the stop above breakeven
+            if close_price > breakeven_price:
+                self.active_stop = max(self.active_stop, trail_stop, breakeven_price)
+            else:
+                self.active_stop = max(self.active_stop, trail_stop)
 
             should_exit, reason = self._check_exit_conditions(regime, efficiency, close_price, self.active_stop)
         

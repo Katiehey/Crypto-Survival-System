@@ -18,7 +18,7 @@ class ExecutionResult:
     """Result of an order execution."""
     
     def __init__(self, success: bool, execution_price: float, fee: float, 
-                 filled_size: float = 0.0,  # Add this!
+                 filled_size: float = 0.0,  
                  reason: str = "", timestamp: datetime = None):
         self.success = success
         self.execution_price = execution_price
@@ -126,9 +126,10 @@ class ExecutionSimulator:
                 "price moved too fast"
             ]
             return ExecutionResult(
-                success=True,
+                success=False,
                 execution_price=price,
                 fee=0.0,
+                filled_size=0.0,
                 reason=random.choice(reasons)
             )
         
@@ -153,9 +154,10 @@ class ExecutionSimulator:
                 # Buy limit only executes if market price <= limit price
                 if price > limit_price:
                     return ExecutionResult(
-                        success=True,
-                        execution_price=price,
+                        success=False,
+                        execution_price=0.0,
                         fee=0.0,
+                        filled_size=0.0,
                         reason="limit price not reached"
                     )
                 execution_price = min(execution_price, limit_price)
@@ -163,9 +165,10 @@ class ExecutionSimulator:
                 # Sell limit only executes if market price >= limit price
                 if price < limit_price:
                     return ExecutionResult(
-                        success=True,
-                        execution_price=price,
+                        success=False,
+                        execution_price=0.0,
                         fee=0.0,
+                        filled_size=0.0,
                         reason="limit price not reached"
                     )
                 execution_price = max(execution_price, limit_price)

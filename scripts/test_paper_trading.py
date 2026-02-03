@@ -86,7 +86,7 @@ def test_basic_paper_trading():
     
     # Create paper trading system
     system = PaperTradingSystem(
-        initial_capital=1000,
+        initial_capital=500,
         symbol="BTC/USDT",
         timeframe="1h",
         speed="instant",  # No delays for testing
@@ -96,7 +96,7 @@ def test_basic_paper_trading():
     # Create components
     strategy = MockStrategy()
     
-    risk_engine = RiskEngine(capital=1000)
+    risk_engine = RiskEngine(capital=500)
     
     data_provider = create_data_provider(
         "simulated",

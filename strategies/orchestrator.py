@@ -27,10 +27,15 @@ class MultiRegimeOrchestrator(Strategy):
             # Use the trend-following logic for bull/bear runs
             signal = self.trend_strat.generate_signal(data, current_position)
             signal.reason = f"Trend Mode: {signal.reason}"
-        elif regime in ['range', 'chaos']:
-            # Use the +4.4% Mean Reversion logic for messy markets
+        elif regime == 'range':
             signal = self.reversion_strat.generate_signal(data, current_position)
-            signal.reason = f"Reversion Mode: {signal.reason}"
+            signal.reason = f"⚖️ Range Reversion: {signal.reason}"
+        
+        elif regime == 'chaos':
+        # Defensive Mode: Use reversion logic but with a 50% size reduction
+            signal = self.reversion_strat.generate_signal(data, current_position)
+            signal.confidence *= 0.5 
+            signal.reason = f"⚠️ Chaos Defense: {signal.reason}"
         else:
             # Stay safe in 'no_trade' regimes
             latest = data.iloc[-1]

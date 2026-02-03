@@ -27,11 +27,11 @@ class RiskLimits:
     """
     
     # Per-Trade Limits
-    MAX_RISK_PER_TRADE: float = 0.04
+    MAX_RISK_PER_TRADE: float = 0.01
     MIN_RISK_PER_TRADE: float = 0.01 
     
     # Daily Limits
-    MAX_DAILY_LOSS: float = 0.12
+    MAX_DAILY_LOSS: float = 0.03
     MAX_TRADES_PER_DAY: int = 1  
     
     # Streak Protection
@@ -40,7 +40,7 @@ class RiskLimits:
     LOSS_STREAK_COOLDOWN_HOURS: int = 2
     
     # Kill Switch
-    MAX_DRAWDOWN_FROM_PEAK: float = 0.85
+    MAX_DRAWDOWN_FROM_PEAK: float = 0.10
     
     # --- THE CRITICAL FIX ---
     # Set to 40% (R200) to safely clear the ~$10 (R180) exchange minimum
