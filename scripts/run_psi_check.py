@@ -31,7 +31,19 @@ def find_latest_production_model(base_dir='models/production'):
 
 
 def main():
-    model_dir = find_latest_production_model()
+    # Locate latest production model
+    try:
+        model_dir = find_latest_production_model()
+    except Exception as e:
+        print('No production model found or error locating model directory:', e)
+        try:
+            with open('psi_check.json', 'w') as fo:
+                json.dump({}, fo)
+            print('Wrote fallback psi_check.json')
+        except Exception:
+            print('Failed to write fallback psi_check.json')
+        return
+
     model_path = os.path.join(model_dir, 'model.pkl')
     meta_path = os.path.join(model_dir, 'metadata.json')
 
@@ -40,15 +52,33 @@ def main():
         mi = MLInference(model_path=model_path)
     except ModuleNotFoundError as e:
         print('ML dependencies not available; skipping PSI model-based check:', e)
-        # Write empty result file so CI step downstream can continue
-        out_path = os.path.join(model_dir, 'psi_check.json')
-        with open(out_path, 'w') as fo:
-            json.dump({}, fo)
-        print('Wrote', out_path)
+        out_path = os.path.join(model_dir, 'psi_check.json') if os.path.isdir(model_dir) else 'psi_check.json'
+        try:
+            with open(out_path, 'w') as fo:
+                json.dump({}, fo)
+            print('Wrote', out_path)
+        except Exception:
+            print('Failed to write psi_check.json to', out_path)
         return
-    features = mi.feature_names
+    except Exception as e:
+        print('Failed to load model; skipping PSI check:', e)
+        try:
+            with open('psi_check.json', 'w') as fo:
+                json.dump({}, fo)
+            print('Wrote fallback psi_check.json')
+        except Exception:
+            print('Failed to write fallback psi_check.json')
+        return
+
+    features = getattr(mi, 'feature_names', []) or []
     if not features:
         print('Model does not expose feature names; cannot run PSI')
+        try:
+            with open(os.path.join(model_dir, 'psi_check.json'), 'w') as fo:
+                json.dump({}, fo)
+            print('Wrote empty psi_check.json')
+        except Exception:
+            pass
         return
 
     # Load historical data (provider will compute features)
@@ -131,20 +161,33 @@ def main():
 
     # Save results
     out_path = os.path.join(model_dir, 'psi_check.json')
-    with open(out_path, 'w') as fo:
-        json.dump(psi_results, fo, default=str, indent=2)
-    print('Wrote', out_path)
+    try:
+        with open(out_path, 'w') as fo:
+            json.dump(psi_results, fo, default=str, indent=2)
+        print('Wrote', out_path)
+    except Exception as e:
+        print('Failed to write psi_check.json to model dir, writing fallback:', e)
+        try:
+            with open('psi_check.json', 'w') as fo:
+                json.dump(psi_results, fo, default=str, indent=2)
+            print('Wrote fallback psi_check.json')
+        except Exception:
+            print('Failed to write any psi_check.json')
+
     # Exit non-zero if any ALERT (PSI >= 0.25)
-    any_alert = any((isinstance(v, dict) and v.get('psi', 0) >= 0.25) for v in psi_results.values())
+    try:
+        any_alert = any((isinstance(v, dict) and v.get('psi', 0) >= 0.25) for v in psi_results.values())
+    except Exception:
+        any_alert = False
+
     if any_alert:
         print('PSI ALERT detected; sending alert and exiting with code 2')
         try:
-                msg = "\n".join(msg_lines)
-                send_telegram_alert(msg)
+            msg = "\n".join(msg_lines)
+            send_telegram_alert(msg)
         except Exception:
             pass
         sys.exit(2)
-
 
 if __name__ == '__main__':
     main()
