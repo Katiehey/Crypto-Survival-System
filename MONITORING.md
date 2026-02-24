@@ -17,3 +17,23 @@ Remediation steps on ALERT:
 Secrets: CI requires `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in repository Secrets.
 
 Contact: ops@yourorg.example
+
+
+Kill-switch and emergency runbook
+--------------------------------
+
+- File-based kill switch: create a file named `STOP_TRADING` in the repository root to immediately abort any running historical paper-trading run. The system checks for this file at each candle and will stop gracefully.
+- Emergency steps:
+  1. Create `STOP_TRADING` in repo root (`touch STOP_TRADING`) to stop runs.
+  2. If running on a remote host, SSH in and stop the process (e.g., `pkill -f run_production_smoke.py`) and create `STOP_TRADING` as a safety latch.
+  3. Deactivate ML gating (for investigation) by removing or replacing the production model, but only after triage.
+  4. For urgent shutdowns, revoke exchange API keys used for the paper environment.
+
+Post-deploy checklist before enabling live paper trading
+-----------------------------------------------------
+
+- Run `scripts/dry_run_paper_trading.py --limit 500 --speed instant` and confirm no exceptions and reasonable trade counts.
+- Run `scripts/run_psi_check.py` and ensure PSI is OK or WARN (no ALERT).
+- Validate `risk/engine.py` limits are conservative for R500: check `RISK_LIMITS` in `config/system_config.py`.
+- Ensure CI secrets and monitoring alerts are configured and verified.
+
