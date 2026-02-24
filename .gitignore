@@ -72,3 +72,23 @@ secrets/
 *.key
 *.pem
 credentials.json
+
+# Project artifacts, models and large outputs
+backtest_results/
+models/
+backtest_results/**
+models/**
+
+# Virtualenv used in this workspace
+.venv/
+
+# Pickle / model artifacts
+*.pkl
+
+# Images and plots from backtests
+*.png
+*.svg
+
+# CSV/JSON outputs (backtest summaries)
+*.csv
+*.json
