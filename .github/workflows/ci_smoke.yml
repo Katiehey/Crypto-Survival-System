@@ -23,6 +23,15 @@ jobs:
       - name: Run tests
         run: |
           PYTHONPATH=. pytest -q || true
+      - name: Validate exchange credentials
+        env:
+          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_API_SECRET: ${{ secrets.BINANCE_API_SECRET }}
+          BINANCE_TESTNET: ${{ secrets.BINANCE_TESTNET }}
+          TRADING_PAIR: ${{ secrets.TRADING_PAIR }}
+        run: |
+          PYTHONPATH=. python3 scripts/validate_exchange_credentials.py
+
       - name: Run production smoke
         continue-on-error: true
         run: |
