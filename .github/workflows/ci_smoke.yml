@@ -59,3 +59,21 @@ jobs:
             PYTHONPATH=. python3 -c "from monitoring.alerts import send_telegram_alert; send_telegram_alert('CI: PSI ALERT detected during CI smoke job')"
             exit 1
           fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-smoke-summary
+          path: |
+            backtest_results/production_smoke_summary.json
+
+      - name: Upload PSI artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: psi-check
+          path: |
+            psi_status.txt
+            psi_check.json
+            models/production/**/psi_check.json
