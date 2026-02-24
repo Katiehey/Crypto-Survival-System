@@ -53,13 +53,14 @@ class SimpleTrendStrategy(Strategy):
     
     def __init__(
         self,
-        entry_efficiency_threshold: float = 0.20,
-        exit_efficiency_threshold: float = 0.05,
-        min_regime_confidence: float = 0.70,
-        stop_loss_atr_multiple: float = 4.5,  # This is our primary variable
+        entry_efficiency_threshold: float = 0.65,
+        exit_efficiency_threshold: float = 0.40,
+        min_regime_confidence: float = 0.60,
+        stop_loss_atr_multiple: float = 3.0,
         exit_patience: int = 20,
-        take_profit_multiplier: float = 6.0,
+        take_profit_multiplier: float = 4.0,
         atr_period: int = 14,
+        min_trade_value: float = 50.0,
     ):
         """
         Initialize simple trend strategy.
@@ -74,6 +75,8 @@ class SimpleTrendStrategy(Strategy):
         
         self.entry_efficiency_threshold = entry_efficiency_threshold
         self.stop_loss_atr_multiple = stop_loss_atr_multiple
+        # Minimum cash notional we will consider for an entry (protects against micro-trades)
+        self.min_trade_value = min_trade_value
         
         # Secondary Parameters
         self.exit_efficiency_threshold = exit_efficiency_threshold
@@ -95,6 +98,9 @@ class SimpleTrendStrategy(Strategy):
         )
     
     def generate_signal(self, dataframe: pd.DataFrame, current_position: Optional[str] = None, current_capital: float = 500.0) -> TradingSignal:
+        # Validate required columns for strategy operation
+        self._validate_strategy_data(dataframe)
+
         if len(dataframe) < 30:
             return TradingSignal(SignalType.NO_TRADE, 0.0, dataframe.iloc[-1]['close'], reason="Waiting for data")
 
@@ -144,35 +150,52 @@ class SimpleTrendStrategy(Strategy):
         is_efficient = (efficiency >= self.entry_efficiency_threshold)
         is_confident = (regime_conf >= self.min_regime_confidence)
 
-        if is_trending and (efficiency >= 0.30 or is_confident):
-            stop_price = close_price - (atr * self.stop_loss_atr_multiple)
+        if is_trending and is_efficient and is_confident:
+            # Calculate stop loss using helper (honors min/max limits)
+            stop_price = self._calculate_stop_loss(close_price, atr)
             stop_dist_pct = abs(close_price - stop_price) / close_price
-        
-        # Prevent division by zero or nonsensical tight stops
-            if stop_dist_pct < 0.002: stop_dist_pct = 0.002 
 
-        # ADAPTIVE SIZING MATH: Size = Risk_Amount / Distance_to_Stop
+            # Prevent division by zero or nonsensical tight stops
+            if stop_dist_pct < 0.002:
+                stop_dist_pct = 0.002
+
+            # ADAPTIVE SIZING MATH: Size (cash) = Risk_Amount / Distance_to_Stop
             target_risk_amount = current_capital * 0.01  # Risk exactly 1% of total bankroll
             requested_rand_size = target_risk_amount / stop_dist_pct
-        
-        # Survival Cap: Never use more than 95% of capital even if stop is tight
+
+            # Survival Cap: Never use more than 95% of capital even if stop is tight
             final_rand_size = min(requested_rand_size, current_capital * 0.95)
-        
-        # State Tracking for the trailing stop
+
+            # Enforce minimum trade notional to avoid micro trades on tiny accounts
+            if final_rand_size < self.min_trade_value:
+                return TradingSignal(SignalType.NO_TRADE, 0.0, close_price,
+                                     reason=f"Size below minimum R{self.min_trade_value}")
+
+            # State Tracking for the trailing stop
             self.highest_price = close_price
             self.active_stop = stop_price
-        
-            return TradingSignal(
-            signal_type=SignalType.LONG,
-            confidence=1.0,
-            entry_price=close_price,
-            stop_loss=stop_price,
-            size=final_rand_size,
-            regime=regime,
-            reason=f"Entry | R{final_rand_size:.2f} | Risk: 1% (Dist: {stop_dist_pct*100:.1f}%)"
-        )
 
-        return TradingSignal(SignalType.NO_TRADE, 0.0, close_price, reason=f"Wait: {regime}")
+            confidence = self._calculate_entry_confidence(efficiency, regime_conf, current_row.get('volume_regime', 'normal'))
+
+            return TradingSignal(
+                signal_type=SignalType.LONG,
+                confidence=confidence,
+                entry_price=close_price,
+                stop_loss=stop_price,
+                size=final_rand_size,
+                regime=regime,
+                reason=f"Entry | R{final_rand_size:.2f} | Risk: 1% (Dist: {stop_dist_pct*100:.1f}%)"
+            )
+
+        # More informative wait/reject reasons for tests and debugging
+        if not is_trending:
+            return TradingSignal(SignalType.NO_TRADE, 0.0, close_price, reason="Wrong regime")
+        if not is_efficient:
+            return TradingSignal(SignalType.NO_TRADE, 0.0, close_price, reason="Weak trend")
+        if not is_confident:
+            return TradingSignal(SignalType.NO_TRADE, 0.0, close_price, reason="Low confidence")
+
+        return TradingSignal(SignalType.NO_TRADE, 0.0, close_price, reason="Wait")
     
     
     
@@ -186,12 +209,38 @@ class SimpleTrendStrategy(Strategy):
         if close_price <= active_stop:
             return True, "Stop Loss Hit"
 
+        # Exit on regime change (e.g., trend -> range/chaos)
+        if regime != 'trend':
+            return True, "Regime changed"
+
     # SOFT EXIT: Only exit if the trend is fundamentally broken
     # We ignore 'chaos' or 'range' regimes once we are already in a trade.
-        if efficiency < 0.10: 
-            return True, "Efficiency Collapse"
+        if efficiency < self.exit_efficiency_threshold:
+            return True, "Weakening trend"
 
         return False, None
+
+    def _calculate_stop_loss(self, entry_price: float, atr: float) -> float:
+        """
+        Calculate stop loss based on ATR with bounds to avoid absurdly wide stops.
+        """
+        # Base stop: entry - (atr * 2)
+        stop = entry_price - (atr * 2)
+
+        # Ensure stop not wider than 5% of entry (safety for tiny accounts)
+        min_allowed = entry_price * 0.95
+        if stop < min_allowed:
+            stop = min_allowed
+
+        return stop
+
+    def _calculate_entry_confidence(self, efficiency: float, regime_confidence: float, volume_regime: str) -> float:
+        """
+        Compute an entry confidence score (0..1) combining efficiency, regime confidence, and volume.
+        """
+        volume_bonus = 1.0 if volume_regime == 'high' else 0.0
+        conf = 0.5 * efficiency + 0.3 * regime_confidence + 0.2 * volume_bonus
+        return max(0.0, min(1.0, conf))
     
 
     def _validate_strategy_data(self, data: pd.DataFrame) -> None:

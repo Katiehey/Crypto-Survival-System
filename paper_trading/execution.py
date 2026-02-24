@@ -192,6 +192,7 @@ class ExecutionSimulator:
             success=True,
             execution_price=execution_price,
             fee=fee,
+            filled_size=filled_size,
             reason=f"filled {filled_size/size*100:.1f}%" if filled_size < size else "fully filled"
         )
         

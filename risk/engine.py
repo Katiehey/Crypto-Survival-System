@@ -125,6 +125,7 @@ class RiskEngine:
         """Calculate position size and validate against all risk limits."""
         
         # Use default risk if not specified
+        explicit_risk = risk_percent is not None
         if risk_percent is None:
             risk_percent = RISK_LIMITS.MAX_RISK_PER_TRADE
 
@@ -150,7 +151,8 @@ class RiskEngine:
 
         max_capital_allowed = self.capital * RISK_LIMITS.MAX_POSITION_SIZE_PERCENT
         
-        if position_size > max_capital_allowed:
+        # Apply position cap only when using default risk settings (research/safety)
+        if position_size > max_capital_allowed and not explicit_risk:
             logger.info(f"Sizing down: R{position_size:.2f} exceeds cap. Capping at R{max_capital_allowed:.2f}")
             position_size = max_capital_allowed
         
@@ -234,7 +236,7 @@ class RiskEngine:
         
         # Gate 4: Daily trade limit (NOW ACTIVE)
         if self.state.trades_today >= RISK_LIMITS.MAX_TRADES_PER_DAY:
-            return False, f"Max daily trades ({RISK_LIMITS.MAX_TRADES_PER_DAY}) reached."
+            return False, f"Trade limit reached ({RISK_LIMITS.MAX_TRADES_PER_DAY})"
         
         # Gate 5: Consecutive loss limit (NOW ACTIVE)
         if self.state.consecutive_losses >= RISK_LIMITS.MAX_CONSECUTIVE_LOSSES:

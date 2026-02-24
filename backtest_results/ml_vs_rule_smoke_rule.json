@@ -1,0 +1,18 @@
+{
+  "total_trades": 1,
+  "winning_trades": 1,
+  "losing_trades": 0,
+  "win_rate": 1.0,
+  "total_pnl": 0.16290773852270646,
+  "total_return_pct": -0.0386684522954539,
+  "avg_win": 0.16290773852270646,
+  "avg_loss": 0,
+  "largest_win": 0.16290773852270646,
+  "largest_loss": 0,
+  "current_capital": 499.80665773852274,
+  "peak_capital": 500.0,
+  "current_drawdown": 0.038668452295451065,
+  "open_positions": 0,
+  "start_time": "2026-02-14 11:08:04.809859",
+  "end_time": "2026-03-28 03:08:04.809870"
+}

@@ -290,14 +290,78 @@ def create_integrated_paper_trading_system(
         speed=speed,
         data_source=data_source
     )
-    
-    # Create integrator and setup
+
+    # Create integrator
     integrator = PaperTradingIntegrator(system)
-    success = integrator.setup_with_existing_components()
-    
-    if not success:
-        logger.warning("Integration failed. Creating minimal system for testing.")
-    
+
+    # Decide on data provider type based on available credentials and requested data_source
+    try:
+        from config.exchange_config import get_exchange_config
+        exchange_cfg = get_exchange_config()
+        has_creds = exchange_cfg.has_credentials()
+    except Exception:
+        has_creds = False
+
+    # Determine provider type
+    provider_type = None
+    if data_source == 'historical':
+        provider_type = 'historical'
+    elif data_source == 'simulated':
+        provider_type = 'simulated'
+    else:
+        # Prefer live if credentials exist, fallback to historical, then simulated
+        if has_creds:
+            provider_type = 'live'
+        else:
+            provider_type = 'historical'
+
+    try:
+        from paper_trading.data_provider import create_data_provider
+        data_provider = create_data_provider(provider_type, symbol=symbol, timeframe=timeframe)
+    except Exception as e:
+        logger.warning(f"Could not create data provider ({provider_type}): {e}. Falling back to simulated.")
+        from paper_trading.data_provider import create_data_provider
+        data_provider = create_data_provider('simulated', symbol=symbol, timeframe=timeframe)
+
+    # Create strategy and risk engine
+    try:
+        from strategies.simple_trend import SimpleTrendStrategy
+        strategy = SimpleTrendStrategy()
+    except Exception as e:
+        logger.error(f"Failed to import SimpleTrendStrategy: {e}")
+        strategy = None
+
+    try:
+        from risk.engine import RiskEngine
+        risk_engine = RiskEngine(capital=initial_capital)
+    except Exception as e:
+        logger.error(f"Failed to initialize RiskEngine: {e}")
+        risk_engine = None
+
+    # Execution simulator
+    try:
+        from paper_trading.execution import ExecutionSimulator
+        execution_simulator = ExecutionSimulator()
+    except Exception as e:
+        logger.warning(f"Execution simulator not available: {e}")
+        execution_simulator = None
+
+    # Setup the system with components
+    system.setup(
+        strategy=strategy,
+        risk_engine=risk_engine,
+        data_provider=data_provider,
+        execution_simulator=execution_simulator
+    )
+
+    # Attach monitor if available
+    try:
+        from paper_trading.monitor import PaperTradingMonitor
+        system.monitor = PaperTradingMonitor(system)
+    except Exception:
+        system.monitor = None
+
+    logger.info("Paper trading system integrated (best-effort)")
     return system, integrator
 
 

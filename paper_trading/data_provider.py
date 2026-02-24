@@ -101,42 +101,111 @@ class HistoricalDataProvider(BaseDataProvider):
             DataFrame with OHLCV data
         """
         cache_key = f"{self.symbol}_{self.timeframe}_{limit}_{start_date}_{end_date}"
-        
+
         if cache_key in self.data_cache:
             logger.debug(f"Using cached data for {cache_key}")
             return self.data_cache[cache_key].copy()
-        
+
         if self.fetcher:
-            # Use real data if available
-            df = self.fetcher.load_candles(
-                symbol=self.symbol,
-                timeframe=self.timeframe,
-                limit=limit
-            )
-            
-            if start_date:
-                df = df[df['datetime'] >= start_date]
-            if end_date:
-                df = df[df['datetime'] <= end_date]
-            
-            # Add features if not present
-            if 'regime' not in df.columns:
+            # Load real data from the DB
+            try:
+                df = self.fetcher.load_candles(
+                    symbol=self.symbol,
+                    timeframe=self.timeframe,
+                    limit=limit
+                )
+
+                if df is None or df.empty:
+                    logger.warning(f"No candles found for {self.symbol} {self.timeframe}, using simulated data")
+                    df = self._generate_simulated_data(limit, start_date, end_date)
+                    self.data_cache[cache_key] = df.copy()
+                    return df
+
+                # Ensure datetime column exists and is of type datetime
+                if 'datetime' not in df.columns:
+                    if 'timestamp' in df.columns:
+                        df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
+                    else:
+                        logger.warning("No timestamp column present; adding synthetic datetime")
+                        df['datetime'] = pd.to_datetime(df.index)
+
+                # Apply date filters if provided
+                if start_date is not None:
+                    df = df[df['datetime'] >= start_date].reset_index(drop=True)
+                if end_date is not None:
+                    df = df[df['datetime'] <= end_date].reset_index(drop=True)
+
+                # Add features and regime classification if absent
+                if 'regime' not in df.columns or 'atr' not in df.columns:
+                    try:
+                        from regime.features import calculate_complete_pipeline
+                        logger.info(f"Calculating features for {len(df)} candles")
+                        df = calculate_complete_pipeline(df)
+                    except Exception as e:
+                        logger.warning(f"Feature pipeline failed: {e}; filling minimal defaults")
+                        if 'regime' not in df.columns:
+                            df['regime'] = 'trend'
+                        if 'atr' not in df.columns:
+                            df['atr'] = (df['high'] - df['low']).abs().rolling(14, min_periods=1).mean()
+
+                # Cache and return
+                self.data_cache[cache_key] = df.copy()
+                logger.info(f"Loaded {len(df)} candles of historical data")
+                return df
+
+            except Exception as e:
+                logger.error(f"Error loading historical data via DataFetcher: {e}. Trying direct DB read.")
+                # Fall through to direct DB attempt below
+        # If DataFetcher unavailable or failed, attempt direct SQLite read from db_path
+        try:
+            import sqlite3
+            db_path = self.db_path or 'trading.db'
+            # If a common local data path exists, prefer it
+            import os
+            if not os.path.exists(db_path) and os.path.exists('data/trading.db'):
+                db_path = 'data/trading.db'
+
+            conn = sqlite3.connect(db_path)
+            query = """
+                SELECT timestamp, open, high, low, close, volume
+                FROM candles
+                WHERE symbol = ? AND timeframe = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+            """
+            df = pd.read_sql_query(query, conn, params=(self.symbol, self.timeframe, limit))
+            conn.close()
+
+            if df is None or df.empty:
+                logger.warning(f"No candles found in DB at {db_path} for {self.symbol} {self.timeframe}; using simulated data")
+                df = self._generate_simulated_data(limit, start_date, end_date)
+                self.data_cache[cache_key] = df.copy()
+                return df
+
+            df = df.sort_values('timestamp').reset_index(drop=True)
+            df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
+
+            # Add minimal features if missing
+            if 'regime' not in df.columns or 'atr' not in df.columns:
                 try:
                     from regime.features import calculate_complete_pipeline
-                    logger.info("Calculating real-time regime features for historical data...")
+                    logger.info(f"Calculating features for {len(df)} candles (direct DB)")
                     df = calculate_complete_pipeline(df)
-                except Exception as e:
-                    logger.warning(f"Could not calculate real regimes: {e}. Falling back to 'trend'.")
-                    df['regime'] = 'trend' # Safer than random choice
-        else:
-            # Generate simulated data
+                except Exception:
+                    if 'regime' not in df.columns:
+                        df['regime'] = 'trend'
+                    if 'atr' not in df.columns:
+                        df['atr'] = (df['high'] - df['low']).abs().rolling(14, min_periods=1).mean()
+
+            self.data_cache[cache_key] = df.copy()
+            logger.info(f"Loaded {len(df)} candles from DB at {db_path}")
+            return df
+        except Exception as e:
+            logger.warning(f"Direct DB read failed: {e}; falling back to simulated data")
             df = self._generate_simulated_data(limit, start_date, end_date)
+            self.data_cache[cache_key] = df.copy()
+            return df
         
-        # Cache the data
-        self.data_cache[cache_key] = df.copy()
-        
-        logger.info(f"Loaded {len(df)} candles of historical data")
-        return df
     
     def _generate_simulated_data(self, limit: int = 1000,
                                start_date: Optional[datetime] = None,

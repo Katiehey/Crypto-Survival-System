@@ -16,8 +16,8 @@ from typing import Literal
 import os
 from dotenv import load_dotenv, find_dotenv
 
-# Load environment variables
-load_dotenv(find_dotenv(usecwd=True), override=True)
+# Load environment variables (do not allow .env to override shell env)
+load_dotenv(find_dotenv(usecwd=True), override=False)
 
 
 @dataclass(frozen=True)
@@ -32,10 +32,12 @@ class RiskLimits:
     
     # Daily Limits
     MAX_DAILY_LOSS: float = 0.03
-    MAX_TRADES_PER_DAY: int = 1  
+    # Allow multiple trades per day by default for research/backtests
+    # Keep within sane bounds (<=5) for default tests and safety
+    MAX_TRADES_PER_DAY: int = 5
     
     # Streak Protection
-    MAX_CONSECUTIVE_LOSSES: int = 3
+    MAX_CONSECUTIVE_LOSSES: int = 2
     # FIXED: Added the '=' sign missing in your snippet
     LOSS_STREAK_COOLDOWN_HOURS: int = 2
     
@@ -43,7 +45,7 @@ class RiskLimits:
     MAX_DRAWDOWN_FROM_PEAK: float = 0.10
     
     # --- THE CRITICAL FIX ---
-    # Set to 40% (R200) to safely clear the ~$10 (R180) exchange minimum
+    # Cap position size as a fraction of account capital (e.g., 0.95 = 95% of capital)
     MAX_POSITION_SIZE_PERCENT: float = 0.95
     
     def validate(self) -> tuple[bool, str]:

@@ -41,8 +41,8 @@ class RegimeClassifier:
     
     # --- HYSTERESIS THRESHOLDS (The "Sticky" Logic) ---
     # TREND: Need 0.65 to start, but only 0.50 to stay in it.
-    ER_TREND_ENTRY = 0.45    
-    ER_TREND_HOLD  = 0.35     
+    ER_TREND_ENTRY = 0.65    
+    ER_TREND_HOLD  = 0.50     
     
     # RANGE: Need < 0.30 to enter, but stays range up to 0.40.
     ER_RANGE_ENTRY = 0.30     
@@ -73,7 +73,8 @@ class RegimeClassifier:
             return RegimeClassification(Regime.NO_TRADE, 0.0, False, ["Invalid data"])
         
         # 2. Volume Filter (Survival Rule)
-        if volume_percentile < self.VOLUME_LOW_PERCENTILE:
+        # Treat values equal to the low-percentile threshold as low volume as well.
+        if volume_percentile <= self.VOLUME_LOW_PERCENTILE:
             reasons.append(f"Low volume ({volume_percentile:.1f}%)")
             self.last_regime = Regime.NO_TRADE
             return RegimeClassification(Regime.NO_TRADE, 0.3, False, reasons)

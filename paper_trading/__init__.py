@@ -10,6 +10,8 @@ import logging
 from typing import Optional, Dict, List
 
 logger = logging.getLogger(__name__)
+# Import exchange minimum from RiskEngine for consistent minimum-notional enforcement
+from risk.engine import EXCHANGE_MIN_ZAR
 
 
 class PaperTradingSystem:
@@ -53,7 +55,14 @@ class PaperTradingSystem:
         # State tracking
         self.open_positions = []
         self.closed_trades = []
-        self.equity_history = []
+        # Initialize equity history with a consistent schema
+        self.equity_history = [{
+            'timestamp': datetime.now(),
+            'capital': initial_capital,
+            'cash': initial_capital,
+            'position_value': 0.0,
+            'open_positions': 0
+        }]
         self.current_time = None
         self.is_running = False
         
@@ -92,11 +101,6 @@ class PaperTradingSystem:
         # Initialize risk engine with paper capital
         self.risk_engine.capital = self.current_capital
 
-        self.equity_history.append({
-        'timestamp': None,
-        'equity': self.initial_capital,
-        'capital': self.initial_capital
-    })
         
         logger.info("Paper trading system setup complete")
     
@@ -256,22 +260,44 @@ class PaperTradingSystem:
             regime=current_regime
         )
 
+        # Normal sizing info logged at debug when enabled
+
         if not pos_calc.is_valid or pos_calc.size <= 0:
             logger.info(f"Signal rejected: {pos_calc.reason}")
             if "Daily loss limit" in pos_calc.reason or "Kill switch" in pos_calc.reason:
                 logger.critical("🚨 SACRED LIMIT BREACHED. Shutting down system.")
                 self.is_running = False
             return
+
+        # Enforce minimum trade notional to avoid micro-trades on small accounts
+        try:
+            min_notional = EXCHANGE_MIN_ZAR
+            if pos_calc.size < min_notional:
+                logger.info(f"Signal rejected: Calculated size R{pos_calc.size:.2f} below exchange minimum R{min_notional:.2f}")
+                return
+        except Exception:
+            # If something goes wrong reading the min, continue with existing flow
+            pass
         
         # 3. Execution Simulation (The FIX happens here)
-        if self.execution_simulator:
+            if self.execution_simulator:
             # We pass pos_calc.size (The Rand/Dollar amount)
-            execution = self.execution_simulator.execute_order(
-                symbol=self.symbol,
-                side=signal.signal_type.value if hasattr(signal.signal_type, 'value') else str(signal.signal_type).lower(),
-                size=pos_calc.size,  # Correctly passing the "Cash" size
-                price=current_price
-            )
+                # Normalize side to 'buy'/'sell' for simulators
+                raw_side = signal.signal_type.value if hasattr(signal.signal_type, 'value') else str(signal.signal_type)
+                raw_side = raw_side.lower()
+                if raw_side in ('long', 'buy'):
+                    side = 'buy'
+                elif raw_side in ('short', 'sell'):
+                    side = 'sell'
+                else:
+                    side = raw_side
+
+                execution = self.execution_simulator.execute_order(
+                    symbol=self.symbol,
+                    side=side,
+                    size=pos_calc.size,  # Correctly passing the "Cash" size
+                    price=current_price
+                )
             
             # THE FIX: Trust the success boolean, not reason strings
             if not execution.success:
@@ -279,9 +305,9 @@ class PaperTradingSystem:
                 return
 
             # Use ACTUAL data from the simulator result
-            final_size = execution.filled_size
-            final_price = execution.execution_price
-            final_fee = execution.fee
+            final_size = getattr(execution, 'filled_size', None)
+            final_price = getattr(execution, 'execution_price', None)
+            final_fee = getattr(execution, 'fee', None)
         else:
             # Fallback if no simulator is attached
             final_size = pos_calc.size
@@ -297,6 +323,11 @@ class PaperTradingSystem:
             take_profit=self._calculate_take_profit(signal, final_price, candle)
         )
         position.entry_fee = final_fee
+        # Attach risk sizing metadata so closes can report to RiskEngine
+        try:
+            position.risk_amount = pos_calc.risk_amount
+        except Exception:
+            position.risk_amount = 0.0
         
         # 5. Update State (Atomic operation)
         self.open_positions.append(position)
@@ -335,15 +366,15 @@ class PaperTradingSystem:
                 """Update position metrics."""
                 self.current_price = current_price
                 
-                if self.side == 'long':
+                if self.side in ('long', 'buy'):
                     self.current_pnl = (current_price - self.entry_price) * (self.size / self.entry_price)
-                else:  # short
+                else:  # short / sell
                     self.current_pnl = (self.entry_price - current_price) * (self.size / self.entry_price)
                 
                 self.current_pnl_percent = (self.current_pnl / self.size) * 100
                 
                 # Update MFE/MAE
-                if self.side == 'long':
+                if self.side in ('long', 'buy'):
                     self.max_favorable = max(self.max_favorable, current_price - self.entry_price)
                     self.max_adverse = min(self.max_adverse, current_price - self.entry_price)
                 else:
@@ -358,10 +389,19 @@ class PaperTradingSystem:
         
         position_id = f"PAPER_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(self.closed_trades) + 1}"
         
+        raw_side = signal.signal_type.value if hasattr(signal.signal_type, 'value') else str(signal.signal_type)
+        raw_side = raw_side.lower()
+        if raw_side in ('long', 'buy'):
+            side = 'buy'
+        elif raw_side in ('short', 'sell'):
+            side = 'sell'
+        else:
+            side = raw_side
+
         return PaperPosition(
             id=position_id,
             symbol=self.symbol,
-            side=signal.signal_type.value if hasattr(signal.signal_type, 'value') else str(signal.signal_type).lower(),
+            side=side,
             entry_price=entry_price,
             size=size,
             entry_time=self.current_time,
@@ -375,40 +415,57 @@ class PaperTradingSystem:
         if exit_price is None:
             exit_price = position.current_price
         
-        # Calculate final PnL
-        if position.side == 'long':
-            pnl = (exit_price - position.entry_price) * (position.size / position.entry_price)
-        else:
-            pnl = (position.entry_price - exit_price) * (position.size / position.entry_price)
-        
-        # Simulate exit execution
+        # Simulate exit execution first so we compute PnL using the actual filled price
         exit_fee = 0.0
         if self.execution_simulator:
+            # Map logical position side to execution side
+            exec_side = 'sell' if position.side in ('long', 'buy') else 'buy'
             execution = self.execution_simulator.execute_order(
                 symbol=self.symbol,
-                side='sell' if position.side == 'long' else 'buy',
+                side=exec_side,
                 size=position.size,
                 price=exit_price
             )
-            
+
             if execution.success:
+                # Use actual execution values
                 exit_price = execution.execution_price
                 exit_fee = execution.fee
             else:
                 logger.warning(f"Exit execution failed: {execution.reason}")
+
+        # Calculate final (gross) PnL using the final exit price
+        if position.side in ('long', 'buy'):
+            pnl = (exit_price - position.entry_price) * (position.size / position.entry_price)
+        else:
+            pnl = (position.entry_price - exit_price) * (position.size / position.entry_price)
         
-        # Calculate net PnL with fees
-        total_fees = (position.entry_fee if hasattr(position, 'entry_fee') else 0) + exit_fee
+        # Calculate fees and net PnL for recording (fees include entry + exit)
+        entry_fee = (position.entry_fee if hasattr(position, 'entry_fee') else 0.0)
+        total_fees = entry_fee + exit_fee
+
+        # net_pnl is the realized PnL after all fees (used for records and risk accounting)
         net_pnl = pnl - total_fees
-        
+
         pnl_percent = 0.0
         if position.size > 0:
             pnl_percent = (net_pnl / position.size) * 100
 
-        # Update capital
-        self.current_capital += position.size + net_pnl
+        # Update capital: entry already deducted entry_fee and size at open.
+        # On close we add back the position notional and the gross pnl, then subtract the exit fee.
+        # This yields the same final capital as applying net_pnl once.
+        self.current_capital += position.size + pnl - exit_fee
 
         self.risk_engine.capital = self.current_capital
+
+        # Record trade outcome with RiskEngine so daily limits / cooldowns apply
+        try:
+            risk_amt = getattr(position, 'risk_amount', 0.0)
+            # Use net_pnl (after both fees) for risk accounting
+            self.risk_engine.record_trade(pnl=net_pnl, risk_amount=risk_amt, current_time=self.current_time)
+        except Exception:
+            # Non-fatal: continue even if risk engine recording fails
+            logger.exception("Failed to record trade in RiskEngine")
         
         # Create trade record
         trade = {

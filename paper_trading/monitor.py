@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from enum import Enum
+import json
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +152,20 @@ class PaperTradingMonitor:
         self.alerts.append(alert)
         self._last_alert_time[message] = now
         logger.warning(str(alert))
+
+        # Persist alert to JSONL log for later inspection
+        try:
+            os.makedirs('logs', exist_ok=True)
+            log_path = os.path.join('logs', 'alerts.jsonl')
+            with open(log_path, 'a') as fh:
+                fh.write(json.dumps({
+                    'timestamp': now.isoformat(),
+                    'level': level.value,
+                    'message': message,
+                    'source': source
+                }) + "\n")
+        except Exception as e:
+            logger.error(f"Failed to write alert to log: {e}")
 
     def _check_alerts(self, metrics: Dict):
         if metrics['drawdown'] > self.thresholds['drawdown_critical']:

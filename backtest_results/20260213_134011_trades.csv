@@ -1,0 +1,2 @@
+trade_id,entry_time,exit_time,entry_price,exit_price,side,size,pnl,pnl_percent,exit_reason,fees_paid,duration_hours,max_favorable,max_adverse
+PAPER_20260213_134010_1,2025-12-28 20:00:00,2025-12-28 21:00:00,87427.244765,87500.78115499999,long,475.0,0.16290773852270646,0.03429636600478031,take_profit,0.7125,1.0,0.0,0.0
