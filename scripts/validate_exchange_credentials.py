@@ -62,6 +62,21 @@ def main():
         return 0
 
     except Exception as e:
+        # Treat location-restricted responses from Binance (HTTP 451) as a warning
+        try:
+            import ccxt
+            from ccxt.base.errors import ExchangeNotAvailable
+        except Exception:
+            ExchangeNotAvailable = None
+
+        msg = str(e)
+        if ExchangeNotAvailable and isinstance(e, ExchangeNotAvailable):
+            # ccxt surfaces HTTP status in the exception message; detect 451 or restricted-location
+            if '451' in msg or 'restricted location' in msg.lower():
+                logger.warning('Exchange appears restricted in CI environment: %s', msg)
+                # Don't fail CI for geographic restrictions — treat as non-fatal
+                return 0
+
         logger.exception('Exchange validation failed: %s', e)
         return 4
 
