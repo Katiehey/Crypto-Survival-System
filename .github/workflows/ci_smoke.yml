@@ -45,6 +45,8 @@ jobs:
         id: psi_check
         continue-on-error: true
         run: |
+          # Remove any stale baseline so CI creates a fresh baseline from the CI DB
+          find models/production -type f -name 'psi_baseline.json' -print -delete || true
           PYTHONPATH=. python3 scripts/run_psi_check.py
           echo "PSI_EXIT_CODE=$?" > psi_status.txt
       - name: Notify on PSI alert
