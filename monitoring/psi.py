@@ -28,21 +28,35 @@ def calculate_psi(expected: pd.Series, actual: pd.Series, buckets: int = 10) -> 
     expected = expected.dropna()
     actual = actual.dropna()
 
-    if expected.empty or actual.empty:
-        return 0.0, {"error": "empty_series"}
+    if expected.empty:
+        return None, {"error": "empty_expected_series"}
+    if actual.empty:
+        return None, {"error": "empty_actual_series"}
 
     edges = _get_bin_edges(expected, buckets=buckets)
 
     expected_counts, _ = np.histogram(expected, bins=edges)
     actual_counts, _ = np.histogram(actual, bins=edges)
 
-    expected_pct = expected_counts / expected_counts.sum()
-    actual_pct = actual_counts / actual_counts.sum()
+    # Apply simple Laplace smoothing to avoid empty-bin explosions
+    # Add one pseudo-count to each bin for both expected and actual
+    # This reduces sensitivity to single empty bins while preserving relative mass
+    alpha = 1.0
+    expected_counts = expected_counts.astype(float) + alpha
+    actual_counts = actual_counts.astype(float) + alpha
 
-    # Avoid zeros
-    expected_pct = np.where(expected_pct == 0, eps, expected_pct)
-    actual_pct = np.where(actual_pct == 0, eps, actual_pct)
+    exp_sum = expected_counts.sum()
+    act_sum = actual_counts.sum()
 
+    if exp_sum == 0:
+        return None, {"error": "empty_expected_counts", "expected_counts": expected_counts.tolist()}
+    if act_sum == 0:
+        return None, {"error": "empty_actual_counts", "actual_counts": actual_counts.tolist()}
+
+    expected_pct = expected_counts / float(exp_sum)
+    actual_pct = actual_counts / float(act_sum)
+
+    # Compute per-bin PSI contributions
     contribs = (expected_pct - actual_pct) * np.log(expected_pct / actual_pct)
     psi_value = float(np.sum(contribs))
 
