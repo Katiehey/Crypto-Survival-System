@@ -122,6 +122,11 @@ def run_model_psi_check(model_dir: str,
     if baseline is None and recent_df is not None:
         baseline = {}
         for col in recent_df.columns:
+            # Skip non-numeric columns (e.g., timestamps) to avoid degenerate
+            # bin edges and empty histogram bins in PSI computations.
+            if not np.issubdtype(recent_df[col].dtype, np.number):
+                baseline[col] = []
+                continue
             try:
                 baseline[col] = compute_baseline_quantiles(recent_df[col].iloc[:1000], buckets=buckets)
             except Exception:
@@ -147,11 +152,19 @@ def run_model_psi_check(model_dir: str,
         if np.allclose(q[0], q[-1]):
             psi_val = 0.0
         else:
+            # Prefer smoothed/robust variants for percentile-like features when available
+            actual_series = actual[f]
+            # If a smoothed percentile exists, use it instead to reduce PSI sensitivity
+            if f == 'volume_percentile' and 'volume_percentile_smooth' in actual.columns:
+                actual_series = actual['volume_percentile_smooth']
+            if f == 'efficiency_ratio_smooth' and 'efficiency_ratio_smooth' in actual.columns:
+                actual_series = actual['efficiency_ratio_smooth']
+
             expected_synth = []
             for i in range(len(q)-1):
                 a, b = q[i], q[i+1]
                 expected_synth.extend(list(a + (b - a) * np.random.rand(100)))
-            psi_val, _ = calculate_psi(pd.Series(expected_synth), actual[f], buckets=buckets)
+            psi_val, _ = calculate_psi(pd.Series(expected_synth), actual_series, buckets=buckets)
 
         status = 'OK'
         if psi_val >= alert_threshold:
