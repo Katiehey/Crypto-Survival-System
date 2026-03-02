@@ -28,6 +28,10 @@ jobs:
       - name: Run tests
         run: |
           PYTHONPATH=. pytest -q || true
+      - name: Run histogram-count integration test
+        run: |
+          # Run only the histogram-count test to fail fast if histograms are degenerate
+          PYTHONPATH=. pytest -q tests/test_histogram_counts.py::test_histogram_min_counts
       - name: Validate exchange credentials
         env:
           BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
