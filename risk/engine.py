@@ -15,6 +15,8 @@ from typing import Tuple, Optional
 
 from config.system_config import RISK_LIMITS
 from risk.capital_tracker import CapitalTracker
+import json
+import pathlib
 import os
 
 # Configure logging
@@ -117,6 +119,18 @@ class RiskEngine:
         self.capital_tracker = CapitalTracker(starting_capital=capital)
         
         logger.info(f"RiskEngine initialized with capital: R{capital:.2f}")
+
+        # Repo-level kill switch: if set, immediately activate kill switch
+        try:
+            ks_path = pathlib.Path(__file__).resolve().parents[1] / 'ops' / 'kill_switch.json'
+            if ks_path.exists():
+                data = json.loads(ks_path.read_text())
+                if data.get('active'):
+                    reason = data.get('reason', 'repo_kill_switch')
+                    self.activate_kill_switch(f"Repo kill switch: {reason}")
+        except Exception:
+            # Don't fail initialization if ops file cannot be read
+            pass
 
     def calculate_position_size(
         self,
