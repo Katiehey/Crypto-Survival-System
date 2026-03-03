@@ -45,6 +45,7 @@ def send_telegram_alert(message: str, parse_mode: str = 'Markdown') -> bool:
     import time
     try:
         import urllib.request
+        import urllib.error
 
         url = f"https://api.telegram.org/bot{cfg['token']}/sendMessage"
         payload = {
@@ -63,6 +64,36 @@ def send_telegram_alert(message: str, parse_mode: str = 'Markdown') -> bool:
                     resp_data = resp.read().decode('utf-8')
                     logger.info('Telegram alert sent')
                     return True
+            except urllib.error.HTTPError as he:
+                # Read and log Telegram API error response body for debugging (400/401 etc.)
+                try:
+                    body = he.read().decode('utf-8', errors='replace')
+                except Exception:
+                    body = '<unable to read body>'
+                logger.warning(f'Telegram HTTPError (attempt {attempt}): {he.code} {he.reason} - {body}')
+
+                # Common cause: message entity parse errors when using Markdown.
+                # Attempt an immediate fallback send without `parse_mode` (plain text).
+                if "can't parse entities" in body.lower():
+                    logger.info('Telegram parse error detected; retrying without parse_mode')
+                    try:
+                        payload_no_mode = payload.copy()
+                        payload_no_mode.pop('parse_mode', None)
+                        data_no_mode = json.dumps(payload_no_mode).encode('utf-8')
+                        req2 = urllib.request.Request(url, data=data_no_mode, headers={'Content-Type': 'application/json'})
+                        with urllib.request.urlopen(req2, timeout=10) as resp2:
+                            resp2.read()
+                            logger.info('Telegram alert sent (fallback without parse_mode)')
+                            return True
+                    except Exception as e2:
+                        logger.warning(f'Fallback send without parse_mode failed: {e2}')
+
+                if attempt < max_attempts:
+                    time.sleep(backoff)
+                    backoff *= 2
+                else:
+                    logger.error('All Telegram send attempts failed (HTTPError)')
+                    return False
             except Exception as e:
                 logger.warning(f'Telegram send attempt {attempt} failed: {e}')
                 if attempt < max_attempts:

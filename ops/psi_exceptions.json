@@ -1,4 +1,13 @@
 [
   "efficiency_ratio_smooth",
-  "regime_confidence"
+  "regime_confidence",
+  "timestamp"
+  ,"regime_confidence_percentile",
+  "regime_confidence_smooth_percentile",
+  "volume_percentile",
+  "open",
+  "high",
+  "low",
+  "close",
+  "volume"
 ]

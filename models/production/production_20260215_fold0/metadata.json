@@ -2,5 +2,7 @@
   "source": "walkforward",
   "source_folder": "models/walkforward/20260214_230628_fold0",
   "tag": "production_20260215_fold0",
-  "promoted_at": "2026-02-15T12:30:00"
+  "promoted_at": "2026-02-15T12:30:00",
+  "reserialized_with": "reserialize_models.py",
+  "reserialized_at": "2026-03-02T18:15:36.330514Z"
 }

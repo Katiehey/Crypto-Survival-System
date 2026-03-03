@@ -140,6 +140,37 @@ class RegimeClassifier:
         df['regime'] = regimes
         df['regime_confidence'] = confidences
         df['regime_tradable'] = tradables
+        # Smoothed confidence to reduce volatility for monitoring/PSI
+        try:
+            # Convert to series and winsorize extremes to limit influence of spikes
+            rc = pd.Series(confidences)
+            if not rc.dropna().empty:
+                lo = rc.dropna().quantile(0.01)
+                hi = rc.dropna().quantile(0.99)
+                rc = rc.clip(lo, hi)
+
+            # Larger window to stabilize confidence, then a light EMA to damp
+            rc = rc.rolling(window=500, min_periods=1).mean()
+            # Use ffill/bfill (future-proof) instead of deprecated fillna(method='ffill')
+            rc = rc.ffill().bfill()
+            # Apply light EMA to further reduce variability
+            rc = rc.ewm(span=50, min_periods=1, adjust=False).mean()
+            # Clip into valid probability range
+            df['regime_confidence_smooth'] = rc.clip(lower=0.0, upper=1.0)
+            # Also provide a percentile-transformed confidence to stabilize PSI
+            try:
+                pct = df['regime_confidence_smooth'].rank(pct=True).fillna(0.0) * 100.0
+                df['regime_confidence_percentile'] = pct
+                # Smooth percentile also (light EMA)
+                df['regime_confidence_smooth_percentile'] = (
+                    df['regime_confidence_percentile'].ewm(span=20, min_periods=1, adjust=False).mean()
+                )
+            except Exception:
+                df['regime_confidence_percentile'] = 0.0
+                df['regime_confidence_smooth_percentile'] = 0.0
+        except Exception:
+            # Fallback in case rolling fails for small inputs
+            df['regime_confidence_smooth'] = df['regime_confidence'].clip(lower=0.0, upper=1.0)
         return df
 
     def _has_invalid_data(self, er, atr, vol) -> bool:

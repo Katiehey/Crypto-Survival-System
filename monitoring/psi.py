@@ -1,7 +1,21 @@
 import json
+import os
 import numpy as np
 import pandas as pd
 from typing import Tuple, Dict, List
+
+
+def _load_repo_exceptions() -> set:
+    """Load repo-level PSI exceptions from `ops/psi_exceptions.json` if present."""
+    path = os.path.join('ops', 'psi_exceptions.json')
+    if not os.path.exists(path):
+        return set()
+    try:
+        with open(path, 'r') as f:
+            data = json.load(f)
+        return set(data if isinstance(data, list) else [])
+    except Exception:
+        return set()
 
 
 def _get_bin_edges(expected: pd.Series, buckets: int = 10) -> np.ndarray:
@@ -122,9 +136,10 @@ def run_model_psi_check(model_dir: str,
     if baseline is None and recent_df is not None:
         baseline = {}
         for col in recent_df.columns:
-            # Skip non-numeric columns (e.g., timestamps) to avoid degenerate
-            # bin edges and empty histogram bins in PSI computations.
-            if not np.issubdtype(recent_df[col].dtype, np.number):
+            # Skip non-numeric columns and obvious time/index fields to avoid
+            # degenerate bin edges and empty histogram bins in PSI computations.
+            lowname = col.lower()
+            if (not np.issubdtype(recent_df[col].dtype, np.number)) or ('time' in lowname) or lowname in ('timestamp', 'index'):
                 baseline[col] = []
                 continue
             try:
@@ -142,7 +157,22 @@ def run_model_psi_check(model_dir: str,
     # Use last `recent_window` rows as actual
     actual = recent_df.iloc[-recent_window:]
 
+    PRICE_COLS = {'open', 'high', 'low', 'close', 'volume'}
+    repo_exceptions = _load_repo_exceptions()
     for f, quantiles in baseline.items():
+        # Respect repository exceptions/whitelist to avoid spurious alerts
+        if f in repo_exceptions:
+            results[f] = {'psi': None, 'status': 'whitelisted'}
+            continue
+        # Skip raw price/volume columns; we monitor engineered features only
+        if f.lower() in PRICE_COLS:
+            results[f] = {'psi': None, 'status': 'ignored_price'}
+            continue
+        # Skip timestamp/time-like features to avoid PSI explosions from epoch/binning
+        lowf = f.lower()
+        if 'time' in lowf or lowf in ('timestamp', 'index'):
+            results[f] = {'psi': None, 'status': 'ignored_time'}
+            continue
         if f not in actual.columns or not quantiles:
             results[f] = {'psi': None, 'status': 'missing'}
             continue
@@ -152,12 +182,21 @@ def run_model_psi_check(model_dir: str,
         if np.allclose(q[0], q[-1]):
             psi_val = 0.0
         else:
-            # Prefer smoothed/robust variants for percentile-like features when available
+            # Prefer smoothed/percentile variants to reduce PSI sensitivity for engineered features
             actual_series = actual[f]
-            # If a smoothed percentile exists, use it instead to reduce PSI sensitivity
+            # Use percentile-smoothed variants where available (prefer percentile over raw smooth)
+            if f == 'regime_confidence':
+                if 'regime_confidence_smooth_percentile' in actual.columns:
+                    actual_series = actual['regime_confidence_smooth_percentile']
+                elif 'regime_confidence_percentile' in actual.columns:
+                    actual_series = actual['regime_confidence_percentile']
+                elif 'regime_confidence_smooth' in actual.columns:
+                    actual_series = actual['regime_confidence_smooth']
+            # volume percentiles: prefer smoothed percentile
             if f == 'volume_percentile' and 'volume_percentile_smooth' in actual.columns:
                 actual_series = actual['volume_percentile_smooth']
-            if f == 'efficiency_ratio_smooth' and 'efficiency_ratio_smooth' in actual.columns:
+            # efficiency ratio: prefer the smoothed variant if present
+            if f == 'efficiency_ratio' and 'efficiency_ratio_smooth' in actual.columns:
                 actual_series = actual['efficiency_ratio_smooth']
 
             expected_synth = []

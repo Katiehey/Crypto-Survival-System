@@ -1,0 +1,36 @@
+name: Adversarial PSI Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [ main, master ]
+
+jobs:
+  adversarial-psi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: |
+          python -m pip install -r requirements.txt
+      - name: Run CI PSI gate
+        run: |
+          export HARD_MAX_ORDER_ZAR=1000
+          python scripts/ci_psi_gate.py --model-dir models/production/production_retrained_winsor_quantile_long
+      - name: Upload CI PSI report
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-psi-report
+          path: backtest_results/ci_psi_report.json
+      - name: Notify via Telegram (optional)
+        if: env.TELEGRAM_BOT_TOKEN != '' && env.TELEGRAM_CHAT_ID != ''
+        run: |
+          python scripts/notify_telegram.py || true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
