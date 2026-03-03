@@ -144,7 +144,12 @@ def run_model_psi_check(model_dir: str,
     # Use last `recent_window` rows as actual
     actual = recent_df.iloc[-recent_window:]
 
+    PRICE_COLS = {'open', 'high', 'low', 'close', 'volume'}
     for f, quantiles in baseline.items():
+        # Skip raw price/volume columns; we monitor engineered features only
+        if f.lower() in PRICE_COLS:
+            results[f] = {'psi': None, 'status': 'ignored_price'}
+            continue
         # Skip timestamp/time-like features to avoid PSI explosions from epoch/binning
         lowf = f.lower()
         if 'time' in lowf or lowf in ('timestamp', 'index'):
