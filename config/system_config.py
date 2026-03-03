@@ -99,6 +99,9 @@ class SystemConfig:
     # Mode
     TRADING_MODE: Literal["paper", "live"] = os.getenv('TRADING_MODE', 'paper')  # type: ignore
     USE_TESTNET: bool = os.getenv('BINANCE_TESTNET', 'true').lower() == 'true'
+    # Canary toggle: enable a small-scale canary deployment for paper trading
+    # Set environment variable CANARY_ENABLED=true to enable
+    CANARY_ENABLED: bool = os.getenv('CANARY_ENABLED', 'false').lower() == 'true'
     
     def validate(self) -> tuple[bool, str]:
         """
