@@ -15,6 +15,9 @@ from typing import Tuple, Optional
 
 from config.system_config import RISK_LIMITS
 from risk.capital_tracker import CapitalTracker
+import json
+import pathlib
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -23,6 +26,8 @@ logger = logging.getLogger(__name__)
 # EXCHANGE_MIN_ZAR: Approx $10 minimum notional requirement for most exchanges
 # This prevents the bot from attempting orders that will be rejected.
 EXCHANGE_MIN_ZAR = 50.0
+# Hard maximum order notional allowed by runtime safeties (can be overridden by env)
+HARD_MAX_ORDER_ZAR = float(os.environ.get('HARD_MAX_ORDER_ZAR', '1000.0'))
 
 @dataclass
 class TradeState:
@@ -115,6 +120,18 @@ class RiskEngine:
         
         logger.info(f"RiskEngine initialized with capital: R{capital:.2f}")
 
+        # Repo-level kill switch: if set, immediately activate kill switch
+        try:
+            ks_path = pathlib.Path(__file__).resolve().parents[1] / 'ops' / 'kill_switch.json'
+            if ks_path.exists():
+                data = json.loads(ks_path.read_text())
+                if data.get('active'):
+                    reason = data.get('reason', 'repo_kill_switch')
+                    self.activate_kill_switch(f"Repo kill switch: {reason}")
+        except Exception:
+            # Don't fail initialization if ops file cannot be read
+            pass
+
     def calculate_position_size(
         self,
         entry_price: float,
@@ -155,6 +172,11 @@ class RiskEngine:
         if position_size > max_capital_allowed and not explicit_risk:
             logger.info(f"Sizing down: R{position_size:.2f} exceeds cap. Capping at R{max_capital_allowed:.2f}")
             position_size = max_capital_allowed
+
+        # Runtime hard cap: prevent any order exceeding HARD_MAX_ORDER_ZAR
+        if position_size > HARD_MAX_ORDER_ZAR:
+            logger.warning(f"Hard cap active: Capping position R{position_size:.2f} to HARD_MAX_ORDER_ZAR R{HARD_MAX_ORDER_ZAR:.2f}")
+            position_size = HARD_MAX_ORDER_ZAR
         
         # NEW CHECK: Prevent leverage/position size exceeding total capital
         if position_size > self.capital:

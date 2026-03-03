@@ -30,7 +30,15 @@ class ExchangeConfig:
         self.api_secret: Optional[str] = os.getenv('BINANCE_API_SECRET')
         self.use_testnet: bool = os.getenv('BINANCE_TESTNET', 'true').lower() == 'true'
         
-        print(f"DEBUG: API Key from env: {os.getenv('BINANCE_API_KEY')[:5]}***")
+        # Debug prints should be defensive: env vars may be missing in CI/test environments
+        api_key_preview = None
+        env_api_key = os.getenv('BINANCE_API_KEY')
+        if env_api_key:
+            api_key_preview = f"{env_api_key[:5]}***"
+        else:
+            api_key_preview = '<not set>'
+
+        print(f"DEBUG: API Key from env: {api_key_preview}")
         print(f"DEBUG: Testnet setting: {os.getenv('BINANCE_TESTNET')}")
     
         self.api_key: Optional[str] = os.getenv('BINANCE_API_KEY')
@@ -113,12 +121,15 @@ class ExchangeConfig:
             return False, f"Connection test failed: {str(e)}"
 
 
-# Module-level singleton
-_exchange_config = ExchangeConfig()
+# Module-level singleton (lazy-initialized to avoid import-time side effects)
+_exchange_config: Optional[ExchangeConfig] = None
 
 
 def get_exchange_config() -> ExchangeConfig:
-    """Get the singleton exchange configuration instance."""
+    """Get the singleton exchange configuration instance (lazy create)."""
+    global _exchange_config
+    if _exchange_config is None:
+        _exchange_config = ExchangeConfig()
     return _exchange_config
 
 

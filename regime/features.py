@@ -122,16 +122,28 @@ def calculate_atr_percentile(
         raise ValueError("Lookback period must be >= 2")
     
     def rolling_percentile(series):
-        """Calculate percentile of last value in rolling window."""
-        if len(series) < 2:
+        """Calculate percentile of last value in rolling window.
+
+        Handles constant windows and NaNs gracefully to avoid degenerate
+        percentile outputs that can lead to empty histogram bins.
+        """
+        # Work on non-NaN values
+        non_na = series.dropna()
+        if len(non_na) < 2:
             return np.nan
-        
+
         # Last value
         current = series.iloc[-1]
-        
-        # Calculate percentile rank
-        percentile = (series < current).sum() / len(series) * 100
-        
+        if pd.isna(current):
+            return np.nan
+
+        # If all values identical, return neutral percentile (50)
+        if non_na.nunique() == 1:
+            return 50.0
+
+        # Calculate percentile rank using non-NaN values
+        percentile = (non_na < current).sum() / len(non_na) * 100
+
         return percentile
     
     atr_percentile = atr.rolling(window=lookback).apply(
@@ -320,13 +332,10 @@ def main():
         'low': prices - 100,
         'volume': volume,
     })
-    
+
     # 3. Run complete pipeline
     try:
         # Assuming this function calls add_atr, add_efficiency, add_volume, and classify_regime
-        df = calculate_complete_pipeline(df)
-        
-        # Display sample results by regime
         print("\n" + "=" * 60)
         print("SAMPLE RESULTS BY DETECTED REGIME")
         print("=" * 60)
@@ -425,12 +434,16 @@ def calculate_efficiency_ratio(
     total_movement = price_changes.rolling(window=period).sum()
     
     # Efficiency Ratio = net change / total movement
-    # Handle division by zero (when total_movement = 0)
-    efficiency_ratio = net_change / total_movement.replace(0, np.nan)
-    
-    # Clip to [0, 1] range (should already be, but ensure)
+    # Handle division by zero (when total_movement == 0) and avoid inf/NaN
+    total_movement_safe = total_movement.replace(0, np.nan)
+    efficiency_ratio = net_change / total_movement_safe
+
+    # Replace infinite or NaN results (from 0/0 or division by zero) with 0.0
+    efficiency_ratio = efficiency_ratio.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+    # Clip to [0, 1] range
     efficiency_ratio = efficiency_ratio.clip(0, 1)
-    
+
     return efficiency_ratio
 
 
@@ -457,13 +470,20 @@ def calculate_efficiency_percentile(
         raise ValueError("Lookback period must be >= 2")
     
     def rolling_percentile(series):
-        """Calculate percentile of last value in rolling window."""
-        if len(series) < 2:
+        """Calculate percentile of last value in rolling window with safeguards."""
+        non_na = series.dropna()
+        if len(non_na) < 2:
             return np.nan
-        
+
         current = series.iloc[-1]
-        percentile = (series < current).sum() / len(series) * 100
-        
+        if pd.isna(current):
+            return np.nan
+
+        if non_na.nunique() == 1:
+            return 50.0
+
+        percentile = (non_na < current).sum() / len(non_na) * 100
+
         return percentile
     
     efficiency_percentile = efficiency.rolling(window=lookback).apply(
@@ -476,26 +496,56 @@ def calculate_efficiency_percentile(
 
 def smooth_efficiency_ratio(
     efficiency: pd.Series,
-    smoothing_period: int = 5
+    smoothing_period: int = 7,
+    *,
+    method: str = 'sma',
+    min_periods: Optional[int] = None,
+    min_clip: float = 0.0,
+    max_clip: float = 1.0
 ) -> pd.Series:
     """
-    Smooth Efficiency Ratio using simple moving average.
-    
-    Raw efficiency can be noisy. Smoothing helps identify sustained trends
-    vs temporary movements.
-    
+    Smooth Efficiency Ratio using a rolling mean with optional clipping.
+
+    Added guards:
+    - Configurable `min_periods` to avoid overly-aggressive early smoothing
+    - Clip smoothed values to a bounded range to reduce PSI sensitivity
+    - Replace inf/NaN with safe defaults
+
     Args:
         efficiency: Raw efficiency ratio values
         smoothing_period: Period for moving average smoothing
-        
+        min_periods: Minimum observations required in window (defaults to half
+                     the smoothing_period, at least 1)
+        min_clip: Minimum allowed value after smoothing (default 0.0)
+        max_clip: Maximum allowed value after smoothing (default 1.0)
+
     Returns:
-        Smoothed efficiency ratio
+        Smoothed and clipped efficiency ratio
     """
     if smoothing_period < 1:
         raise ValueError("Smoothing period must be >= 1")
-    
-    smoothed = efficiency.rolling(window=smoothing_period).mean()
-    
+
+    if min_periods is None:
+        min_periods = max(1, smoothing_period // 2)
+
+    method = method.lower()
+    if method not in ('sma', 'ema'):
+        raise ValueError("method must be 'sma' or 'ema'")
+
+    if method == 'sma':
+        smoothed = efficiency.rolling(window=smoothing_period, min_periods=min_periods).mean()
+    else:
+        # EMA with span approximated by smoothing_period
+        span = max(1, smoothing_period)
+        smoothed = efficiency.ewm(span=span, min_periods=min_periods, adjust=False).mean()
+
+    # Replace problematic values and fill small gaps with neutral value (0.0)
+    smoothed = smoothed.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+    # Clip to configured bounds to avoid extreme values that disproportionately
+    # affect histogram bins and PSI calculations
+    smoothed = smoothed.clip(lower=min_clip, upper=max_clip)
+
     return smoothed
 
 
@@ -534,7 +584,7 @@ def classify_trend_strength(efficiency: pd.Series) -> pd.Series:
 def add_efficiency_features(
     df: pd.DataFrame,
     period: int = 10,
-    smoothing_period: int = 5,
+    smoothing_period: int = 7,
     percentile_lookback: int = 100
 ) -> pd.DataFrame:
     """
@@ -694,13 +744,20 @@ def calculate_volume_percentile(
         raise ValueError("Lookback period must be >= 2")
     
     def rolling_percentile(series):
-        """Calculate percentile of last value in rolling window."""
-        if len(series) < 2:
+        """Calculate percentile of last value in rolling window with safeguards."""
+        non_na = series.dropna()
+        if len(non_na) < 2:
             return np.nan
-        
+
         current = series.iloc[-1]
-        percentile = (series <= current).sum() / len(series) * 100
-        
+        if pd.isna(current):
+            return np.nan
+
+        if non_na.nunique() == 1:
+            return 50.0
+
+        percentile = (non_na <= current).sum() / len(non_na) * 100
+
         return percentile
     
     volume_percentile = volume.rolling(window=lookback).apply(
@@ -811,6 +868,13 @@ def add_volume_features(
         df['volume'],
         lookback=percentile_lookback
     )
+
+    # Smoothed volume percentile (helps reduce PSI sensitivity)
+    # Use a small smoothing window and clip to [0,100]
+    df['volume_percentile_smooth'] = df['volume_percentile'].rolling(
+        window=max(3, int(percentile_lookback/10)),
+        min_periods=1
+    ).mean().replace([np.inf, -np.inf], np.nan).fillna(50.0).clip(0, 100)
     
     # Volume regime classification
     df['volume_regime'] = classify_volume_regime(df['volume_ratio'])

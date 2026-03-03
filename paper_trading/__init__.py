@@ -153,6 +153,15 @@ class PaperTradingSystem:
         
         # Process each candle in sequence
         for i, candle in historical_data.iterrows():
+            # Global file-based kill switch: create a file named STOP_TRADING in repo root to abort
+            try:
+                import os
+                if os.path.exists('STOP_TRADING'):
+                    logger.critical('STOP_TRADING file detected — aborting paper trading run')
+                    self.is_running = False
+                    break
+            except Exception:
+                pass
             if not self.is_running:
                 break
             

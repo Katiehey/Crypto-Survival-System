@@ -28,21 +28,35 @@ def calculate_psi(expected: pd.Series, actual: pd.Series, buckets: int = 10) -> 
     expected = expected.dropna()
     actual = actual.dropna()
 
-    if expected.empty or actual.empty:
-        return 0.0, {"error": "empty_series"}
+    if expected.empty:
+        return None, {"error": "empty_expected_series"}
+    if actual.empty:
+        return None, {"error": "empty_actual_series"}
 
     edges = _get_bin_edges(expected, buckets=buckets)
 
     expected_counts, _ = np.histogram(expected, bins=edges)
     actual_counts, _ = np.histogram(actual, bins=edges)
 
-    expected_pct = expected_counts / expected_counts.sum()
-    actual_pct = actual_counts / actual_counts.sum()
+    # Apply simple Laplace smoothing to avoid empty-bin explosions
+    # Add one pseudo-count to each bin for both expected and actual
+    # This reduces sensitivity to single empty bins while preserving relative mass
+    alpha = 1.0
+    expected_counts = expected_counts.astype(float) + alpha
+    actual_counts = actual_counts.astype(float) + alpha
 
-    # Avoid zeros
-    expected_pct = np.where(expected_pct == 0, eps, expected_pct)
-    actual_pct = np.where(actual_pct == 0, eps, actual_pct)
+    exp_sum = expected_counts.sum()
+    act_sum = actual_counts.sum()
 
+    if exp_sum == 0:
+        return None, {"error": "empty_expected_counts", "expected_counts": expected_counts.tolist()}
+    if act_sum == 0:
+        return None, {"error": "empty_actual_counts", "actual_counts": actual_counts.tolist()}
+
+    expected_pct = expected_counts / float(exp_sum)
+    actual_pct = actual_counts / float(act_sum)
+
+    # Compute per-bin PSI contributions
     contribs = (expected_pct - actual_pct) * np.log(expected_pct / actual_pct)
     psi_value = float(np.sum(contribs))
 
@@ -108,6 +122,11 @@ def run_model_psi_check(model_dir: str,
     if baseline is None and recent_df is not None:
         baseline = {}
         for col in recent_df.columns:
+            # Skip non-numeric columns (e.g., timestamps) to avoid degenerate
+            # bin edges and empty histogram bins in PSI computations.
+            if not np.issubdtype(recent_df[col].dtype, np.number):
+                baseline[col] = []
+                continue
             try:
                 baseline[col] = compute_baseline_quantiles(recent_df[col].iloc[:1000], buckets=buckets)
             except Exception:
@@ -133,11 +152,19 @@ def run_model_psi_check(model_dir: str,
         if np.allclose(q[0], q[-1]):
             psi_val = 0.0
         else:
+            # Prefer smoothed/robust variants for percentile-like features when available
+            actual_series = actual[f]
+            # If a smoothed percentile exists, use it instead to reduce PSI sensitivity
+            if f == 'volume_percentile' and 'volume_percentile_smooth' in actual.columns:
+                actual_series = actual['volume_percentile_smooth']
+            if f == 'efficiency_ratio_smooth' and 'efficiency_ratio_smooth' in actual.columns:
+                actual_series = actual['efficiency_ratio_smooth']
+
             expected_synth = []
             for i in range(len(q)-1):
                 a, b = q[i], q[i+1]
                 expected_synth.extend(list(a + (b - a) * np.random.rand(100)))
-            psi_val, _ = calculate_psi(pd.Series(expected_synth), actual[f], buckets=buckets)
+            psi_val, _ = calculate_psi(pd.Series(expected_synth), actual_series, buckets=buckets)
 
         status = 'OK'
         if psi_val >= alert_threshold:

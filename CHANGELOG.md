@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- chore: add CI smoke workflow with PSI check and Telegram alerts
+- chore: add runtime PSI gating for ML inference and CI fail-on-alert semantics
+- fix: enforce exchange minimum notional to avoid micro trades on small capital
+- docs: add `MONITORING.md` and update `.gitignore`
+# Changelog
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
