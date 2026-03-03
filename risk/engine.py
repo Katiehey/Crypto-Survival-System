@@ -15,6 +15,7 @@ from typing import Tuple, Optional
 
 from config.system_config import RISK_LIMITS
 from risk.capital_tracker import CapitalTracker
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -23,6 +24,8 @@ logger = logging.getLogger(__name__)
 # EXCHANGE_MIN_ZAR: Approx $10 minimum notional requirement for most exchanges
 # This prevents the bot from attempting orders that will be rejected.
 EXCHANGE_MIN_ZAR = 50.0
+# Hard maximum order notional allowed by runtime safeties (can be overridden by env)
+HARD_MAX_ORDER_ZAR = float(os.environ.get('HARD_MAX_ORDER_ZAR', '1000.0'))
 
 @dataclass
 class TradeState:
@@ -155,6 +158,11 @@ class RiskEngine:
         if position_size > max_capital_allowed and not explicit_risk:
             logger.info(f"Sizing down: R{position_size:.2f} exceeds cap. Capping at R{max_capital_allowed:.2f}")
             position_size = max_capital_allowed
+
+        # Runtime hard cap: prevent any order exceeding HARD_MAX_ORDER_ZAR
+        if position_size > HARD_MAX_ORDER_ZAR:
+            logger.warning(f"Hard cap active: Capping position R{position_size:.2f} to HARD_MAX_ORDER_ZAR R{HARD_MAX_ORDER_ZAR:.2f}")
+            position_size = HARD_MAX_ORDER_ZAR
         
         # NEW CHECK: Prevent leverage/position size exceeding total capital
         if position_size > self.capital:
