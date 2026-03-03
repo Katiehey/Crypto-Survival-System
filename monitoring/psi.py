@@ -145,6 +145,11 @@ def run_model_psi_check(model_dir: str,
     actual = recent_df.iloc[-recent_window:]
 
     for f, quantiles in baseline.items():
+        # Skip timestamp/time-like features to avoid PSI explosions from epoch/binning
+        lowf = f.lower()
+        if 'time' in lowf or lowf in ('timestamp', 'index'):
+            results[f] = {'psi': None, 'status': 'ignored_time'}
+            continue
         if f not in actual.columns or not quantiles:
             results[f] = {'psi': None, 'status': 'missing'}
             continue

@@ -1,4 +1,5 @@
 [
   "efficiency_ratio_smooth",
-  "regime_confidence"
+  "regime_confidence",
+  "timestamp"
 ]
