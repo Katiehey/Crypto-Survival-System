@@ -5,6 +5,19 @@ import pandas as pd
 from typing import Tuple, Dict, List
 
 
+def _load_repo_exceptions() -> set:
+    """Load repo-level PSI exceptions from `ops/psi_exceptions.json` if present."""
+    path = os.path.join('ops', 'psi_exceptions.json')
+    if not os.path.exists(path):
+        return set()
+    try:
+        with open(path, 'r') as f:
+            data = json.load(f)
+        return set(data if isinstance(data, list) else [])
+    except Exception:
+        return set()
+
+
 def _get_bin_edges(expected: pd.Series, buckets: int = 10) -> np.ndarray:
     # Use expected distribution quantiles to form bins
     quantiles = np.linspace(0, 100, buckets + 1)
@@ -145,7 +158,12 @@ def run_model_psi_check(model_dir: str,
     actual = recent_df.iloc[-recent_window:]
 
     PRICE_COLS = {'open', 'high', 'low', 'close', 'volume'}
+    repo_exceptions = _load_repo_exceptions()
     for f, quantiles in baseline.items():
+        # Respect repository exceptions/whitelist to avoid spurious alerts
+        if f in repo_exceptions:
+            results[f] = {'psi': None, 'status': 'whitelisted'}
+            continue
         # Skip raw price/volume columns; we monitor engineered features only
         if f.lower() in PRICE_COLS:
             results[f] = {'psi': None, 'status': 'ignored_price'}

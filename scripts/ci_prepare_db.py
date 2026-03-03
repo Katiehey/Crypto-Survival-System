@@ -7,6 +7,8 @@ import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 import os
+import random
+import math
 from config.system_config import SYSTEM_CONFIG
 
 
@@ -43,18 +45,31 @@ def prepare_db(path: str, rows: int = 1000):
     timeframe = SYSTEM_CONFIG.PRIMARY_TIMEFRAME
 
     ts = int(start.timestamp() * 1000)
+    # Use a deterministic random seed for CI reproducibility
+    rnd = random.Random(42)
     price = 20000.0
 
     for i in range(rows):
-        open_p = price + (i % 10) * 0.1
-        close_p = open_p + ((-1) ** i) * 1.0
-        high_p = max(open_p, close_p) + 0.5
-        low_p = min(open_p, close_p) - 0.5
-        volume = 1.0 + (i % 5) * 0.1
+        # Simulate a gentle random walk in price
+        drift = rnd.gauss(0, 0.001)
+        price = max(1.0, price * (1.0 + drift))
+
+        # Add intrabar variation
+        open_p = price + rnd.uniform(-0.5, 0.5)
+        close_p = price + rnd.uniform(-1.0, 1.0)
+        high_p = max(open_p, close_p) + abs(rnd.gauss(0, 0.5))
+        low_p = min(open_p, close_p) - abs(rnd.gauss(0, 0.5))
+
+        # Volume with occasional spikes
+        base_vol = 50.0 + rnd.gauss(0, 10.0)
+        if rnd.random() < 0.03:
+            volume = base_vol * (3.0 + rnd.random() * 5.0)
+        else:
+            volume = max(0.1, base_vol)
 
         cur.execute(
             "INSERT INTO candles (symbol, timeframe, timestamp, open, high, low, close, volume, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (symbol, timeframe, ts, open_p, high_p, low_p, close_p, volume, datetime.now(timezone.utc).isoformat()),
+            (symbol, timeframe, ts, float(open_p), float(high_p), float(low_p), float(close_p), float(volume), datetime.now(timezone.utc).isoformat()),
         )
 
         ts += 3600 * 1000  # advance 1 hour in ms

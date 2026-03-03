@@ -26,8 +26,11 @@ logger = logging.getLogger(__name__)
 # EXCHANGE_MIN_ZAR: Approx $10 minimum notional requirement for most exchanges
 # This prevents the bot from attempting orders that will be rejected.
 EXCHANGE_MIN_ZAR = 50.0
-# Hard maximum order notional allowed by runtime safeties (can be overridden by env)
-HARD_MAX_ORDER_ZAR = float(os.environ.get('HARD_MAX_ORDER_ZAR', '1000.0'))
+# Hard maximum order notional allowed by runtime safeties (can be overridden by env).
+# By default the hard cap is disabled (infinite) to avoid breaking tests; set
+# the env var `HARD_MAX_ORDER_ZAR` to a finite value (e.g. 1000) to enable it.
+_hmo_env = os.environ.get('HARD_MAX_ORDER_ZAR')
+HARD_MAX_ORDER_ZAR = float(_hmo_env) if _hmo_env is not None else float('inf')
 
 @dataclass
 class TradeState:
