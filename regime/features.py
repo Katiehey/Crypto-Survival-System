@@ -498,6 +498,7 @@ def smooth_efficiency_ratio(
     efficiency: pd.Series,
     smoothing_period: int = 7,
     *,
+    method: str = 'sma',
     min_periods: Optional[int] = None,
     min_clip: float = 0.0,
     max_clip: float = 1.0
@@ -527,9 +528,18 @@ def smooth_efficiency_ratio(
     if min_periods is None:
         min_periods = max(1, smoothing_period // 2)
 
-    smoothed = efficiency.rolling(window=smoothing_period, min_periods=min_periods).mean()
+    method = method.lower()
+    if method not in ('sma', 'ema'):
+        raise ValueError("method must be 'sma' or 'ema'")
 
-    # Replace problematic values and fill small gaps with 0.0 (neutral)
+    if method == 'sma':
+        smoothed = efficiency.rolling(window=smoothing_period, min_periods=min_periods).mean()
+    else:
+        # EMA with span approximated by smoothing_period
+        span = max(1, smoothing_period)
+        smoothed = efficiency.ewm(span=span, min_periods=min_periods, adjust=False).mean()
+
+    # Replace problematic values and fill small gaps with neutral value (0.0)
     smoothed = smoothed.replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
     # Clip to configured bounds to avoid extreme values that disproportionately

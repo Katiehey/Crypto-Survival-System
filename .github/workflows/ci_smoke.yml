@@ -47,7 +47,7 @@ jobs:
           PYTHONPATH=. python3 scripts/run_production_smoke.py
       - name: Run PSI check (create exit status)
         id: psi_check
-        continue-on-error: true
+        continue-on-error: false
         run: |
           # Remove any stale baseline so CI creates a fresh baseline from the CI DB
           find models/production -type f -name 'psi_baseline.json' -print -delete || true
@@ -83,3 +83,4 @@ jobs:
             psi_status.txt
             psi_check.json
             models/production/**/psi_check.json
+            backtest_results/psi_diagnostics/**
