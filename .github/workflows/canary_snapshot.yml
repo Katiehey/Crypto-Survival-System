@@ -16,16 +16,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Prepare CI DB (create minimal candles table)
-        run: |
-          # Ensure data dir exists and create deterministic CI DB for snapshot/PSI checks
-          mkdir -p data
-          DB_PATH=data/trading.db PYTHONPATH=. python3 scripts/ci_prepare_db.py
-
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
+
+      - name: Prepare CI DB (create minimal candles table)
+        run: |
+          mkdir -p data
+          DB_PATH=data/trading.db PYTHONPATH=. python3 scripts/ci_prepare_db.py
 
       - name: Install dependencies
         run: |
@@ -39,7 +38,7 @@ jobs:
 
       - name: Run PSI check
         run: |
-          python3 scripts/run_psi_check.py --model-dir "$MODEL_DIR" || true
+          PYTHONPATH=. python3 scripts/run_psi_check.py --model-dir "$MODEL_DIR" || true
 
       - name: Upload snapshots
         uses: actions/upload-artifact@v4
@@ -56,16 +55,14 @@ jobs:
         run: |
           # If there's an ALERT recorded in the model dir, attempt to notify
           if [ -f "$MODEL_DIR/psi_check.json" ]; then
-            python3 - <<'PY'
-import json, os
-f = os.getenv('MODEL_DIR') + '/psi_check.json'
-try:
-    data = json.load(open(f))
-    if data.get('overall_status') == 'ALERT':
-        print('ALERT detected, attempting Telegram notify')
-        # Use repo notifier if available
-        import subprocess
-        subprocess.run(['python3', 'scripts/notify_telegram.py', '--message', 'PSI ALERT detected in scheduled snapshot'], check=False)
-except Exception as e:
-    print('No valid psi_check.json or parse error', e)
-PY
+            PYTHONPATH=. python3 - <<'PY'
+            import json, os, subprocess
+            f = os.getenv('MODEL_DIR') + '/psi_check.json'
+            try:
+                data = json.load(open(f))
+                if data.get('overall_status') == 'ALERT':
+                    print('ALERT detected, attempting Telegram notify')
+                    subprocess.run(['python3', 'scripts/notify_telegram.py', '--message', 'PSI ALERT detected in scheduled snapshot'], check=False)
+            except Exception as e:
+                print('No valid psi_check.json or parse error', e)
+            PY
