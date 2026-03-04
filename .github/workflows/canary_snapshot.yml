@@ -11,14 +11,16 @@ jobs:
     env:
       MODEL_DIR: models/production/production_retrained_winsor_quantile_long
       PYTHONPATH: .
+      DB_PATH: data/trading.db
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Prepare CI DB (create minimal candles table)
         run: |
-          # Create deterministic CI DB for snapshot/PSI checks
-          PYTHONPATH=. python3 scripts/ci_prepare_db.py
+          # Ensure data dir exists and create deterministic CI DB for snapshot/PSI checks
+          mkdir -p data
+          DB_PATH=data/trading.db PYTHONPATH=. python3 scripts/ci_prepare_db.py
 
       - name: Set up Python
         uses: actions/setup-python@v4

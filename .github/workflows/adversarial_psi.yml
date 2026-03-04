@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PYTHONPATH: .
+      DB_PATH: data/trading.db
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -22,7 +23,8 @@ jobs:
           python -m pip install -r requirements.txt
       - name: Prepare CI DB (create minimal candles table)
         run: |
-          PYTHONPATH=. python3 scripts/ci_prepare_db.py
+          mkdir -p data
+          DB_PATH=data/trading.db PYTHONPATH=. python3 scripts/ci_prepare_db.py
       - name: Run CI PSI gate
         run: |
           export HARD_MAX_ORDER_ZAR=1000
