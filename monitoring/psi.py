@@ -93,6 +93,11 @@ def compute_baseline_quantiles(series: pd.Series, buckets: int = 10) -> List[flo
 
 
 def save_baseline(baseline: Dict, path: str) -> None:
+    dirpath = os.path.dirname(path) or '.'
+    try:
+        os.makedirs(dirpath, exist_ok=True)
+    except Exception:
+        pass
     with open(path, 'w') as f:
         json.dump(baseline, f, indent=2)
 
