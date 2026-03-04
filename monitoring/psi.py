@@ -2,6 +2,7 @@ import json
 import os
 import numpy as np
 import pandas as pd
+from pandas.api import types as pdt
 from typing import Tuple, Dict, List
 
 
@@ -139,7 +140,18 @@ def run_model_psi_check(model_dir: str,
             # Skip non-numeric columns and obvious time/index fields to avoid
             # degenerate bin edges and empty histogram bins in PSI computations.
             lowname = col.lower()
-            if (not np.issubdtype(recent_df[col].dtype, np.number)) or ('time' in lowname) or lowname in ('timestamp', 'index'):
+            is_numeric = False
+            try:
+                is_numeric = pdt.is_numeric_dtype(recent_df[col])
+            except Exception:
+                # Fallback: attempt coercion check
+                try:
+                    pd.to_numeric(recent_df[col], errors='raise')
+                    is_numeric = True
+                except Exception:
+                    is_numeric = False
+
+            if (not is_numeric) or ('time' in lowname) or lowname in ('timestamp', 'index'):
                 baseline[col] = []
                 continue
             try:
