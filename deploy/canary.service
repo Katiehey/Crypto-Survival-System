@@ -1,0 +1,15 @@
+[Unit]
+Description=Crypto Survival System Canary (Docker Compose)
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+WorkingDirectory=/opt/crypto-survival-system
+ExecStart=/usr/bin/docker-compose up --build --force-recreate
+ExecStop=/usr/bin/docker-compose down
+Restart=on-failure
+TimeoutStartSec=300
+User=root
+
+[Install]
+WantedBy=multi-user.target

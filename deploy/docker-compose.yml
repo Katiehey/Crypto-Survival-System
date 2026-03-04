@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  canary:
+    build: ..
+    container_name: css_canary
+    environment:
+      - MODEL_DIR=models/production/production_retrained_winsor_quantile_long
+    volumes:
+      - ..:/opt/crypto-survival-system:ro
+    working_dir: /opt/crypto-survival-system
+    command: ["python3", "scripts/write_status_snapshot.py", "--model-dir", "${MODEL_DIR}"]
+    restart: on-failure
