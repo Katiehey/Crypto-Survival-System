@@ -10,6 +10,8 @@ on:
 jobs:
   smoke:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: .
     steps:
       - uses: actions/checkout@v4
       - name: Preflight: ensure .env not committed

@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MODEL_DIR: models/production/production_retrained_winsor_quantile_long
+      PYTHONPATH: .
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,7 +28,7 @@ jobs:
 
       - name: Write status snapshot
         run: |
-          python3 scripts/write_status_snapshot.py --model-dir "$MODEL_DIR"
+          PYTHONPATH=. python3 scripts/write_status_snapshot.py --model-dir "$MODEL_DIR"
 
       - name: Run PSI check
         run: |

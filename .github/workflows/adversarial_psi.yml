@@ -9,6 +9,8 @@ on:
 jobs:
   adversarial-psi:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: .
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -21,7 +23,7 @@ jobs:
       - name: Run CI PSI gate
         run: |
           export HARD_MAX_ORDER_ZAR=1000
-          python scripts/ci_psi_gate.py --model-dir models/production/production_retrained_winsor_quantile_long
+          PYTHONPATH=. python scripts/ci_psi_gate.py --model-dir models/production/production_retrained_winsor_quantile_long
       - name: Upload CI PSI report
         uses: actions/upload-artifact@v4
         with:
