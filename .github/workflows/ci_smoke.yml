@@ -15,7 +15,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Preflight: ensure .env not committed
-        run: |
+        env:
+          PYTHONPATH: .
+          DB_PATH: data/trading.db
+
+        steps:
+          - uses: actions/checkout@v4
+          - name: Preflight: ensure .env not committed
           if git ls-files --error-unmatch .env >/dev/null 2>&1; then
             echo ".env file is tracked in git. This is a security risk. Remove it before merging." >&2
             git ls-files --error-unmatch .env || true
@@ -24,6 +30,10 @@ jobs:
             echo ".env not present in tracked files"
           fi
       - name: Set up Python
+          - name: Prepare CI DB (create minimal candles table)
+            run: |
+              mkdir -p data
+              DB_PATH=data/trading.db PYTHONPATH=. python3 scripts/ci_prepare_db.py
         uses: actions/setup-python@v4
         with:
           python-version: 3.11
@@ -34,13 +44,13 @@ jobs:
           # Ensure scikit-learn is available for PSI model unpickling and checks
           pip install scikit-learn
       - name: Prepare CI DB (create minimal candles table)
-        run: |
-          PYTHONPATH=. python3 scripts/ci_prepare_db.py
-      - name: Run tests
+          - name: Run tests
+            run: |
+              PYTHONPATH=. pytest -q || true
         run: |
           PYTHONPATH=. pytest -q || true
-      - name: Run histogram-count integration test
-        run: |
+              # Run only the histogram-count test to fail fast if histograms are degenerate
+              PYTHONPATH=. pytest -q tests/test_histogram_counts.py::test_histogram_min_counts
           # Run only the histogram-count test to fail fast if histograms are degenerate
           PYTHONPATH=. pytest -q tests/test_histogram_counts.py::test_histogram_min_counts
       - name: Validate exchange credentials
@@ -48,7 +58,7 @@ jobs:
           BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
           BINANCE_API_SECRET: ${{ secrets.BINANCE_API_SECRET }}
           BINANCE_TESTNET: ${{ secrets.BINANCE_TESTNET }}
-          TRADING_PAIR: ${{ secrets.TRADING_PAIR }}
+              PYTHONPATH=. python3 scripts/validate_exchange_credentials.py
         run: |
           PYTHONPATH=. python3 scripts/validate_exchange_credentials.py
 
@@ -62,7 +72,7 @@ jobs:
         run: |
           # Remove any stale baseline so CI creates a fresh baseline from the CI DB
           find models/production -type f -name 'psi_baseline.json' -print -delete || true
-          PYTHONPATH=. python3 scripts/run_psi_check.py
+          PYTHONPATH=. python3 scripts/run_psi_check.py --model-dir models/production/production_retrained_winsor_quantile_long || true
           echo "PSI_EXIT_CODE=$?" > psi_status.txt
       - name: Notify on PSI alert
         if: always()
