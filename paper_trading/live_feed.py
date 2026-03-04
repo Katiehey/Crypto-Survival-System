@@ -81,7 +81,22 @@ class LiveDataFeed:
             self.exchange = config.create_exchange()
             
             # Test connection
-            self.exchange.load_markets()
+            try:
+                self.exchange.load_markets()
+            except Exception as e:
+                # If authentication failed (e.g., invalid API key) but we still
+                # want public market data for paper trading, fall back to a
+                # public-only exchange instance (no credentials).
+                msg = str(e)
+                logger.warning(f"⚠️  Exchange load_markets failed: {msg}. Falling back to public-only exchange.")
+                try:
+                    # Create a public-only exchange instance
+                    self.exchange = ccxt.binance()
+                    self.exchange.enableRateLimit = True
+                    self.exchange.load_markets()
+                except Exception as e2:
+                    logger.error(f"❌ Failed to initialize public exchange fallback: {e2}")
+                    raise
             
             # Set rate limit to avoid issues
             self.exchange.enableRateLimit = True
@@ -386,8 +401,12 @@ class PaperTradingLiveDataProvider:
                 'symbol', 'timeframe'
             ])
     
-    def get_latest_candle(self) -> Optional[Dict]:
-        """Get latest candle from feed."""
+    def get_latest_candle(self, *args, **kwargs) -> Optional[Dict]:
+        """Get latest candle from feed.
+
+        Accepts and ignores legacy/extra arguments to remain backward compatible
+        with callers that pass `symbol`/`timeframe` as kwargs.
+        """
         return self.feed.get_latest_candle()
     
     def get_current_price(self) -> Optional[float]:

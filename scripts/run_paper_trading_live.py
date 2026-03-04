@@ -12,6 +12,14 @@ import logging
 from datetime import datetime, timedelta
 
 logging.basicConfig(level=logging.INFO)
+import sys
+import pathlib
+import os
+
+# Ensure project root is on sys.path for local script execution
+project_root = pathlib.Path(__file__).resolve().parents[1]
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 from paper_trading import PaperTradingSystem
 from paper_trading.data_provider import HistoricalDataProvider
@@ -27,25 +35,28 @@ def parse_args():
     p.add_argument('--capital', type=float, default=500)
     p.add_argument('--timeframe', type=str, default='1h')
     p.add_argument('--hours', type=int, default=2)
+    p.add_argument('--confirm-live', action='store_true', help='Confirm testnet/live run (required for --mode testnet)')
     return p.parse_args()
 
 
-class SimulatedProvider(BaseDataProvider):
-    def __init__(self, symbol='BTC/USDT', timeframe='1h'):
-        super().__init__(symbol, timeframe)
-        self._hist = HistoricalDataProvider()
-
-    def get_latest_candle(self):
-        # Return most recent candle from historical DB (safe fallback)
-        df = self._hist.get_historical_data(limit=1)
-        if df is None or df.empty:
-            return None
-        row = df.iloc[-1]
-        return row.to_dict()
+# Use SimulatedDataProvider for simulated runs (generates realtime-like candles).
+from paper_trading.data_provider import SimulatedDataProvider as SimulatedProvider
 
 
 def main():
     args = parse_args()
+
+    # Safety: require explicit confirmation to run in testnet mode
+    if args.mode == 'testnet' and not args.confirm_live:
+        raise SystemExit("Refusing to run in testnet mode without --confirm-live. Use --confirm-live to acknowledge risks.")
+
+    # Basic secrets check for testnet mode
+    if args.mode == 'testnet':
+        missing = []
+        if not os.getenv('BINANCE_API_KEY') or not os.getenv('BINANCE_API_SECRET'):
+            missing.append('BINANCE API key/secret')
+        if missing:
+            raise SystemExit(f"Missing required credentials for testnet: {', '.join(missing)}. Set in environment or .env and retry.")
 
     system = PaperTradingSystem(
         initial_capital=args.capital,
@@ -64,10 +75,15 @@ def main():
         try:
             from paper_trading.live_feed import LiveDataFeed
             provider = LiveDataFeed(symbol=system.symbol, timeframe=system.timeframe)
+            # If exchange failed to initialize (e.g., bad API keys), fall back
+            if getattr(provider, 'exchange', None) is None:
+                logging.warning('Live feed exchange not initialized (bad keys or network). Falling back to simulated provider')
+                provider = SimulatedProvider()
         except Exception:
             logging.warning('Live feed unavailable, falling back to simulated provider')
             provider = SimulatedProvider()
     else:
+        # HistoricalDataProvider returns a DataFrame for historical simulation
         provider = SimulatedProvider()
 
     system.setup(strategy=strategy, risk_engine=risk, data_provider=provider, execution_simulator=exec_sim)

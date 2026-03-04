@@ -16,6 +16,16 @@ Remediation steps on ALERT:
 
 Secrets: CI requires `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in repository Secrets.
 
+Secrets & Local Development
+---------------------------
+
+- NEVER commit your `.env` file or API credentials. The CI job includes a preflight step that fails if `.env` is tracked in git.
+- Store sensitive values as GitHub Repository Secrets and reference them in workflows (e.g., `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `BINANCE_API_KEY`, `BINANCE_API_SECRET`).
+- For local development, keep a private `.env` (listed in `.gitignore`) and avoid pushing it. Use `python-dotenv` or your shell to export creds when needed.
+- If you find credentials committed to the repo history, rotate them immediately and remove them from history using your org's incident runbook.
+
+CI will not expose secrets in logs; ensure alerts are validated by sending a test message via `scripts/notify_telegram.py` after adding secrets to the repository settings.
+
 Contact: ops@yourorg.example
 
 

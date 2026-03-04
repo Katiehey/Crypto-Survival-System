@@ -12,6 +12,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Preflight: ensure .env not committed
+        run: |
+          if git ls-files --error-unmatch .env >/dev/null 2>&1; then
+            echo ".env file is tracked in git. This is a security risk. Remove it before merging." >&2
+            git ls-files --error-unmatch .env || true
+            exit 1
+          else
+            echo ".env not present in tracked files"
+          fi
       - name: Set up Python
         uses: actions/setup-python@v4
         with:

@@ -14,10 +14,14 @@ DO NOT modify these values casually.
 from dataclasses import dataclass
 from typing import Literal
 import os
-from dotenv import load_dotenv, find_dotenv
-
-# Load environment variables (do not allow .env to override shell env)
-load_dotenv(find_dotenv(usecwd=True), override=False)
+try:
+    from dotenv import load_dotenv, find_dotenv
+    # Load environment variables from .env if python-dotenv is available.
+    # Do not allow .env to override existing shell environment variables.
+    load_dotenv(find_dotenv(usecwd=True), override=False)
+except Exception:
+    # python-dotenv not installed or .env not present; continue without it.
+    pass
 
 
 @dataclass(frozen=True)

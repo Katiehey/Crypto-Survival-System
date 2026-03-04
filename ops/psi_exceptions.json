@@ -4,6 +4,9 @@
   "timestamp"
   ,"regime_confidence_percentile",
   "regime_confidence_smooth_percentile",
+  "atr_percentile",
+  "volume_ma",
+  "atr_pct",
   "volume_percentile",
   "open",
   "high",

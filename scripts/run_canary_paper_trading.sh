@@ -13,5 +13,7 @@ export CANARY_MODEL_DIR="models/production/production_retrained_winsor_quantile_
 CANARY_DURATION_HOURS=${1:-24}
 LOG_DIR="logs/canary_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$LOG_DIR"
-# Run paper trading in dry-run/paper mode and stream logs to file
-python scripts/run_paper_trading_live.py --model-dir "$CANARY_MODEL_DIR" --duration-hours "$CANARY_DURATION_HOURS" 2>&1 | tee "$LOG_DIR/canary.log"
+# Run paper trading in simulated mode for the requested hours and stream logs to file
+# Note: `run_paper_trading_live.py` accepts --mode, --hours and --capital
+export CANARY_MODEL_DIR
+python scripts/run_paper_trading_live.py --mode simulated --hours "$CANARY_DURATION_HOURS" --timeframe 1h --capital 500 2>&1 | tee "$LOG_DIR/canary.log"

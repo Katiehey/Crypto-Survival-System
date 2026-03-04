@@ -13,14 +13,9 @@ This is a simple, robust strategy designed for:
 - Clear, testable rules
 """
 
-from fileinput import close
-from signal import signal
-from kiwisolver import strength
-from kiwisolver import strength
 from typing import Optional
 import pandas as pd
 import numpy as np
-from scipy import signal
 
 from strategies.base import Strategy, TradingSignal, SignalType
 from config.system_config import RISK_LIMITS, SYSTEM_CONFIG

@@ -200,11 +200,8 @@ class PaperTradingSystem:
         # For now, we'll implement a skeleton
         while self.is_running:
             try:
-                # Get latest candle from live data
-                latest_candle = self.data_provider.get_latest_candle(
-                    symbol=self.symbol,
-                    timeframe=self.timeframe
-                )
+                # Get latest candle from live data (data provider API doesn't accept kwargs)
+                latest_candle = self.data_provider.get_latest_candle()
                 
                 if latest_candle is None:
                     continue

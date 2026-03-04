@@ -232,6 +232,12 @@ def add_atr_features(
         df['atr'],
         lookback=percentile_lookback
     )
+
+    # Smoothed ATR percentile (helps reduce PSI sensitivity)
+    df['atr_percentile_smooth'] = df['atr_percentile'].rolling(
+        window=max(3, int(percentile_lookback/10)),
+        min_periods=1
+    ).mean().replace([np.inf, -np.inf], np.nan).fillna(50.0).clip(0, 100)
     
     return df
 

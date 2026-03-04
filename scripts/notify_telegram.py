@@ -10,6 +10,13 @@ import sys
 
 REPORT = 'backtest_results/ci_psi_report.json'
 
+# Try to load a .env file for local runs when python-dotenv is installed.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
 
 def post_telegram(token: str, chat_id: str, text: str) -> bool:
     try:
@@ -18,7 +25,14 @@ def post_telegram(token: str, chat_id: str, text: str) -> bool:
         print('requests not available; cannot post to Telegram')
         return False
     url = f'https://api.telegram.org/bot{token}/sendMessage'
-    resp = requests.post(url, json={'chat_id': chat_id, 'text': text, 'parse_mode': 'Markdown'})
+    try:
+        # send as plain text to avoid Markdown parsing issues
+        resp = requests.post(url, json={'chat_id': chat_id, 'text': text}, timeout=10)
+    except Exception as e:
+        print('HTTP request failed:', repr(e))
+        return False
+    if not resp.ok:
+        print(f'Telegram post failed: {resp.status_code} {resp.text}')
     return resp.ok
 
 
@@ -49,6 +63,8 @@ def main():
     ok = post_telegram(token, chat, text)
     if not ok:
         print('Failed to post to Telegram')
+    else:
+        print('Posted summary to Telegram')
 
 
 if __name__ == '__main__':

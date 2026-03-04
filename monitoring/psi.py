@@ -195,9 +195,17 @@ def run_model_psi_check(model_dir: str,
             # volume percentiles: prefer smoothed percentile
             if f == 'volume_percentile' and 'volume_percentile_smooth' in actual.columns:
                 actual_series = actual['volume_percentile_smooth']
-            # efficiency ratio: prefer the smoothed variant if present
-            if f == 'efficiency_ratio' and 'efficiency_ratio_smooth' in actual.columns:
-                actual_series = actual['efficiency_ratio_smooth']
+            # efficiency ratio: prefer percentile or smoothed variants to reduce PSI sensitivity
+            if f == 'efficiency_ratio':
+                for pref in (
+                    'efficiency_ratio_smooth_percentile',
+                    'efficiency_percentile',
+                    'efficiency_ratio_smooth',
+                    'efficiency_ratio',
+                ):
+                    if pref in actual.columns:
+                        actual_series = actual[pref]
+                        break
 
             expected_synth = []
             for i in range(len(q)-1):

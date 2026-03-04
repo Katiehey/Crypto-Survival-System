@@ -9,10 +9,13 @@ Configure with environment variables:
 If no token/chat are present the functions will log and return False.
 """
 import os
-from dotenv import load_dotenv, find_dotenv
-
-# Ensure .env is loaded so TELEGRAM_* vars are available when this module is imported
-load_dotenv(find_dotenv(usecwd=True), override=False)
+try:
+    from dotenv import load_dotenv, find_dotenv
+    # Load .env if present, but do not override environment variables
+    load_dotenv(find_dotenv(usecwd=True), override=False)
+except Exception:
+    # dotenv not available or .env missing; continue without it
+    pass
 import json
 import logging
 from typing import Optional

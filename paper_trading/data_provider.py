@@ -247,13 +247,24 @@ class HistoricalDataProvider(BaseDataProvider):
             })
         
         df = pd.DataFrame(data)
-        
-        # Add regime features for compatibility
+
+        # Add minimal regime placeholders for compatibility
         df['regime'] = np.random.choice(['trend', 'range', 'chaos'], len(df), p=[0.4, 0.5, 0.1])
         df['regime_confidence'] = np.random.uniform(0.6, 0.9, len(df))
         df['regime_tradable'] = df['regime'].isin(['trend', 'range'])
-        
-        return df
+
+        # Ensure simulated data provides the same feature columns as historical data
+        # by running the full pipeline. This keeps `--mode simulated` behavior
+        # consistent with `HistoricalDataProvider` and allows strategies to run
+        # without requiring a DB.
+        try:
+            from regime.features import calculate_complete_pipeline
+            df_processed = calculate_complete_pipeline(df)
+            return df_processed
+        except Exception:
+            # If pipeline fails for any reason, return the minimal frame
+            # (strategy validation will catch missing columns earlier).
+            return df
     
     def get_latest_candle(self) -> Optional[Dict]:
         """Get latest candle (not implemented for historical)."""
@@ -498,7 +509,15 @@ class SimulatedDataProvider(BaseDataProvider):
             df['regime'] = np.random.choice(['trend', 'range', 'chaos'], len(df), p=[0.4, 0.5, 0.1])
             df['regime_confidence'] = np.random.uniform(0.6, 0.9, len(df))
             df['regime_tradable'] = df['regime'].isin(['trend', 'range'])
-        
+
+            # Try to compute full feature set so strategies can run on simulated data
+            try:
+                from regime.features import calculate_complete_pipeline
+                df = calculate_complete_pipeline(df)
+            except Exception:
+                # If the pipeline fails, return the minimal frame — callers will handle validation
+                pass
+
         return df
     
     def get_latest_candle(self) -> Optional[Dict]:
