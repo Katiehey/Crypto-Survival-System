@@ -144,10 +144,12 @@ def main():
             continue
 
         # Create synthetic expected sample from quantile ranges
+        # Deterministic expected sample: use midpoints of quantile bins
         expected_synth = []
         for i in range(len(quantiles)-1):
-            a, b = quantiles[i], quantiles[i+1]
-            expected_synth.extend(list(a + (b - a) * np.random.rand(100)))
+            a, b = float(quantiles[i]), float(quantiles[i+1])
+            mid = (a + b) / 2.0
+            expected_synth.extend([mid] * 100)
 
         try:
             psi_val, details = calculate_psi(

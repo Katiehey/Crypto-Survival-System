@@ -224,10 +224,12 @@ def run_model_psi_check(model_dir: str,
                         actual_series = actual[pref]
                         break
 
+            # Deterministic expected sample: use midpoints of quantile bins
             expected_synth = []
             for i in range(len(q)-1):
-                a, b = q[i], q[i+1]
-                expected_synth.extend(list(a + (b - a) * np.random.rand(100)))
+                a, b = float(q[i]), float(q[i+1])
+                mid = (a + b) / 2.0
+                expected_synth.extend([mid] * 100)
             psi_val, _ = calculate_psi(pd.Series(expected_synth), actual_series, buckets=buckets)
 
         status = 'OK'
