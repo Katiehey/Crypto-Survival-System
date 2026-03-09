@@ -26,6 +26,10 @@ jobs:
           mkdir -p data
           DB_PATH=data/trading.db PYTHONPATH=. python3 scripts/ci_prepare_db.py
 
+      - name: Assert CI DB
+        run: |
+          DB_PATH=data/trading.db PYTHONPATH=. python3 scripts/check_db.py
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
