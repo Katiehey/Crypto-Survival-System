@@ -67,6 +67,10 @@ jobs:
           PYTHONPATH=. python3 scripts/run_psi_check.py --model-dir models/production/production_retrained_winsor_quantile_long || true
           echo "PSI_EXIT_CODE=$?" > psi_status.txt
 
+      - name: Check PSI alerts for non-whitelisted features
+        run: |
+          PYTHONPATH=. python3 scripts/check_psi_alerts.py || (cat models/production/production_retrained_winsor_quantile_long/psi_check.json || true; exit $?)
+
       - name: Notify on PSI alert
         if: always()
         env:
@@ -97,3 +101,4 @@ jobs:
             psi_check.json
             models/production/**/psi_check.json
             backtest_results/psi_diagnostics/**
+
