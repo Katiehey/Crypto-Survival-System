@@ -45,6 +45,9 @@ jobs:
         run: |
           PYTHONPATH=. python3 scripts/run_psi_check.py --model-dir "$MODEL_DIR" || true
 
+      - name: Ensure status directory exists
+        run: |
+          mkdir -p backtest_results/status
       - name: Upload snapshots
         if: always()
         uses: actions/upload-artifact@v4

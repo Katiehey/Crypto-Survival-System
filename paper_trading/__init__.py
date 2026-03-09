@@ -345,6 +345,14 @@ class PaperTradingSystem:
         crypto_units = final_size / final_price
         logger.info(f"✅ PAPER {signal.signal_type} OPEN: {crypto_units:.8f} Units @ {final_price:.2f} | Fee: {final_fee:.4f}")
         print(f"DEBUG: Size={final_size}, Price={final_price}, Math={crypto_units}")
+        # Send a Telegram alert for opened paper trade (best-effort)
+        try:
+            from monitoring.alerts import send_telegram_alert
+            msg = (f"Paper trade OPEN: {signal.signal_type} {position.id}\n"
+                   f"Pair: {self.symbol}\nPrice: {final_price:.2f}\nSize(R): {final_size:.2f}\nFee: {final_fee:.4f}")
+            send_telegram_alert(msg)
+        except Exception:
+            pass
     
     def _create_position(self, signal, entry_price: float, size: float, 
                         stop_loss: Optional[float], take_profit: Optional[float]):
@@ -500,6 +508,14 @@ class PaperTradingSystem:
         logger.info(f"Position closed: {position.id}, "
                    f"Reason: {exit_reason}, "
                    f"PnL: R{net_pnl:+.2f}")
+        # Send Telegram alert for closed trade (best-effort)
+        try:
+            from monitoring.alerts import send_telegram_alert
+            summary = (f"Paper trade CLOSED: {position.id}\n"
+                       f"Pair: {self.symbol}\nExit price: {exit_price:.2f}\nPnL(R): {net_pnl:+.2f}\nReason: {exit_reason}")
+            send_telegram_alert(summary)
+        except Exception:
+            pass
     
     def _calculate_stop_loss(self, signal, current_price: float, candle: dict) -> Optional[float]:
         """Calculate stop loss price."""

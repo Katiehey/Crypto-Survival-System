@@ -348,6 +348,17 @@ class LiveDataProvider(BaseDataProvider):
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
             
+            # Attempt to compute the full feature set so callers (strategies)
+            # receive the expected columns (e.g. 'efficiency_ratio', 'atr',
+            # 'regime_confidence', 'volume_regime'). This mirrors the
+            # behavior in HistoricalDataProvider and SimulatedDataProvider.
+            try:
+                from regime.features import calculate_complete_pipeline
+                logger.info("Calculating features for live historical context")
+                df = calculate_complete_pipeline(df)
+            except Exception as e:
+                logger.warning(f"Feature pipeline failed for live historical data: {e}; returning raw OHLCV frame")
+
             logger.info(f"Fetched {len(df)} live candles from exchange")
             return df
             

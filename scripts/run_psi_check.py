@@ -51,6 +51,10 @@ def main():
 
     # Guard ML model loading in CI (sklearn may not be installed on runners)
     try:
+        # Ensure MLInference does not re-run runtime PSI gating while this
+        # script is performing the PSI check (avoids circular gating).
+        import os as _os
+        _os.environ.setdefault('DISABLE_RUNTIME_PSI_GATING', 'true')
         mi = MLInference(model_path=model_path)
     except ModuleNotFoundError as e:
         print('ML dependencies not available; skipping PSI model-based check:', e)

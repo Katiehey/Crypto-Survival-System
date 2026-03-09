@@ -47,6 +47,11 @@ class MLInference:
 
         # Runtime PSI gating: if monitoring is available, run a quick PSI check
         try:
+            # Allow callers (CI/tooling) to disable runtime PSI gating by setting
+            # the environment variable `DISABLE_RUNTIME_PSI_GATING=true`.
+            if os.getenv('DISABLE_RUNTIME_PSI_GATING', 'false').lower() == 'true':
+                return
+
             from monitoring.psi import run_model_psi_check
             model_dir = os.path.dirname(model_path)
             res = run_model_psi_check(model_dir)
