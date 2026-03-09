@@ -41,6 +41,7 @@ jobs:
           PYTHONPATH=. python3 scripts/write_status_snapshot.py --model-dir "$MODEL_DIR" || true
 
       - name: Run PSI check
+        continue-on-error: true
         run: |
           PYTHONPATH=. python3 scripts/run_psi_check.py --model-dir "$MODEL_DIR" || true
 
