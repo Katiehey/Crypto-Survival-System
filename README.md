@@ -1,434 +1,148 @@
 # Crypto Survival System
 
-**A private, AI-assisted trading system focused on capital preservation, controlled experimentation, and quiet compounding.**
-
-**Current Status**: ✅ Week 1 Complete - Foundation Ready  
-**Version**: v1.0 (Week 1)  
-**Last Updated**: 2026-01-07
+A lean, intelligent BTC/USDT trading bot with a 4-agent consensus decision system, adaptive regime detection, and walk-forward backtesting. Built for a MacBook running on a small ($27–$500) account.
 
 ---
 
-## ⚡ Quick Start
+## Architecture
+
+```
+config.py     — All settings loaded from .env
+agents.py     — 4-agent consensus: Technical, Sentiment, Risk, Execution
+strategy.py   — ADX regime detection + ATR-based trade levels
+risk.py       — Position sizing, kill switch, daily loss tracking
+backtest.py   — Walk-forward backtester (no lookahead bias)
+bot.py        — Main loop (paper + live), DB logging, Telegram alerts
+```
+
+### How decisions are made
+
+A trade only executes when **all 4 agents agree**:
+
+| Agent | Role | Blocks on |
+|---|---|---|
+| **Technical** | RSI, MACD, Bollinger, EMA | No clear trend/reversal signal |
+| **Sentiment** | RSS news headlines (free) | Strongly opposing market mood |
+| **Risk** | Drawdown, daily loss, cooldown | Any risk limit breach |
+| **Execution** | Fees, slippage, min order | Balance too low, execution unfeasible |
+
+The regime (trending vs ranging) is detected via ADX:
+- **ADX > 25** → Trending → EMA crossover + RSI momentum
+- **ADX ≤ 25** → Ranging → Bollinger mean reversion
+
+---
+
+## Setup
+
+### 1. Clone and create virtual environment
+
 ```bash
-# Clone repository
-git clone https://github.com/yourusername/crypto-survival-system.git
-cd crypto-survival-system
-
-# Setup environment
-python -m venv venv
-source venv/bin/activate
+cd "Crypto-Survival-System"
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
+```
 
-# Initialize database
-python scripts/setup_db.py
+### 2. Configure `.env`
 
-# Run system health check
-python scripts/system_health_check.py
+Edit `.env` with your Binance API keys and Telegram bot token. Key settings:
 
-# Run tests
-pytest tests/ regime/tests/ -v
+```
+TRADING_MODE=paper          # Start here — never start with live
+BINANCE_TESTNET=false       # Use real market data even in paper mode
+STARTING_CAPITAL=500        # Your paper balance in USDT
+TELEGRAM_ENABLED=true
+```
+
+### 3. Keep MacBook awake
+
+```bash
+# Terminal 1 — keep system awake (never sleeps while this runs)
+caffeinate -dimsu &
+
+# Or use Amphetamine (GUI) from the App Store
+```
+
+### 4. Run paper trading
+
+```bash
+python bot.py
+```
+
+### 5. Run walk-forward backtest (recommended before going live)
+
+```bash
+python bot.py --backtest --backtest-days 400
+```
+
+Results saved to `backtest_results/`.
+
+### 6. Switch to live trading
+
+Only after:
+- Paper trading is profitable over ≥ 2 weeks
+- Backtest shows Sharpe ≥ 1.0 and max drawdown < 15%
+
+```bash
+# In .env:
+TRADING_MODE=live
+
+# Or one-off override:
+python bot.py --live
 ```
 
 ---
 
-## 🎯 What This System Can Do (Week 1)
+## Risk parameters (`.env`)
 
-✅ **Fetch and store market data** from Binance  
-✅ **Calculate 19 technical features** (ATR, Efficiency, Volume)  
-✅ **Classify market regimes** (TREND, RANGE, CHAOS, NO_TRADE)  
-✅ **Analyze regime transitions** and patterns  
-✅ **Export complete analysis** to CSV  
-
-❌ **Cannot trade yet** - Need risk engine (Week 2)  
-❌ **Cannot backtest yet** - Need backtesting framework (Week 3)  
-❌ **Cannot paper trade yet** - Need execution simulation (Week 4)
-
----
-
-This repository exists to support **personal trading of my own funds only**.  
-It is designed to survive market uncertainty, not to chase performance.
+| Parameter | Default | Meaning |
+|---|---|---|
+| `MAX_RISK_PER_TRADE` | `0.005` | 0.5% of balance per trade (ignored if balance < $100 — uses $11 minimum) |
+| `MAX_DAILY_LOSS` | `0.01` | 1% daily loss stops trading for the day |
+| `MAX_DRAWDOWN_KILL_SWITCH` | `0.10` | 10% total drawdown engages kill switch |
+| `MAX_CONSECUTIVE_LOSSES` | `2` | Triggers 15-minute cooldown |
+| `MAX_TRADES_PER_DAY` | `2` | Hard cap on daily trades |
+| `ATR_STOP_MULT` | `1.5` | Stop loss = entry ± 1.5×ATR |
+| `ATR_TARGET_MULT` | `3.0` | Take profit = entry ± 3.0×ATR (2:1 R:R) |
 
 ---
 
-## ⚠️ What This Is NOT
+## Kill switch
 
-- Not a signal service  
-- Not a prediction engine  
-- Not a trading bot sold to others  
-- Not financial advice  
-- Not a SaaS or commercial product  
-- Not a get-rich-quick scheme  
-- Not intended for public or third-party use  
-
----
-
-## ✅ What This IS
-
-A **private, single-operator trading system** with:
-
-- Hard risk limits enforced in code  
-- AI used strictly for **offline analysis and regime classification**  
-- Simple, deterministic execution logic  
-- Explicit permission to **not trade**  
-- Full logging for review, debugging, and tax compliance  
-- Emphasis on *survival, consistency, and learning*  
-
----
-
-## 🎯 Core Principles
-
-1. **Survival First**  
-   The system must prefer inactivity over forced participation.
-
-2. **Capital Preservation**  
-   - Max daily loss: **≤ 1%**  
-   - Max risk per trade: **0.25–0.5%**
-
-3. **No Live Self-Modification**  
-   - No parameter changes during live trading  
-   - No strategy mutation while capital is at risk  
-   - All adaptations occur **offline only**
-
-4. **AI Is a Supervisor, Not a Trader**  
-   - AI evaluates regimes and historical performance  
-   - AI does NOT place trades, size positions, or override rules
-
-5. **Radical Transparency**  
-   - Every decision is logged  
-   - Every trade is reproducible  
-   - Every system version is auditable
-
-6. **Legal, Private, and Boring**  
-   - Own capital only  
-   - No investors, no clients, no shared access  
-
----
-
-## 💰 Capital Parameters
-
-- Starting Capital: **R500**  
-- Market Type: **Spot only**  
-- Exchange: **Binance**  
-- Primary Pair: **BTC/USDT**  
-- Position Risk: **0.25–0.5% per trade**  
-- Max Trades per Day: **2**  
-- Max Consecutive Losses: **2**  
-- Leverage: **None**
-
-> The system must remain viable even if capital growth is slow or flat.
-
----
-
-## 🏗️ System Architecture
-
-Market Data
-↓
-Feature Engineering
-↓
-Regime Classifier (Offline AI)
-↓
-Strategy Gate (Rule-Based)
-↓
-Risk Engine (Hard Constraints)
-↓
-Execution (Spot Orders Only)
-↓
-Logging & Metrics
-↓
-Weekly Offline Review
-
-
----
-
-## 🚀 Setup
-
-### Prerequisites
-
-- Python 3.10+  
-- Binance account (Spot trading enabled)  
-- Git  
-- No third-party automation services  
-
----
-
-### Installation
-
-1. Clone repository:
 ```bash
-git clone https://github.com/yourusername/crypto-survival-system.git
-cd crypto-survival-system
+# Toggle on/off
+python bot.py --toggle-kill-switch
+```
 
-2. Create virtual environment:
-python -m venv venv
-source venv/bin/activate  # Linux / macOS
-# venv\Scripts\activate   # Windows
-
-3. Install dependencies:
-pip install -r requirements.txt
-
-4. Configure environment variables:
-cp .env.example .env
-# Add Binance API keys (read + trade only, no withdrawal)
-
-5. Initialize local database:
-python scripts/setup_db.py
-
-📊 Usage Lifecycle
-Phase 1 — Research & Backtesting
-python scripts/run_backtest.py
-
-Phase 2 — Paper Trading (Minimum: several weeks)
-python scripts/run_paper.py
-
-Phase 3 — Live Trading (Micro Capital Only)
-python scripts/run_live.py
-Live trading is permitted only after stable paper performance and manual approval.
-
-🧠 Weekly Review (Offline Only)
-Run on a fixed schedule (e.g. Sundays):
-python evaluation/weekly_review.py
-
-Outputs:
-- Regime performance summaries
-- Strategy expectancy by regime
-- Drawdown statistics
-- Suggestions for offline experimentation
-No changes are deployed automatically.
-
-📝 Development Roadmap
- - Repository scaffolding
- - Market data ingestion
- - Feature engineering module
- - Regime classifier (offline)
- - Risk engine
- - First minimal strategy
- - Backtesting framework
- - Paper trading
- - Live trading (micro size only)
-
-🔒 Security & Privacy
-- API keys stored in .env (never committed)
-- Private repository
-- No webhooks
-- No cloud execution
-- Logs stored locally
-- No outbound data sharing
-
-📈 Performance & Reporting
-- Performance is tracked for personal evaluation only
-- Results are not published, marketed, or shared
-- Withdrawals are periodic and conservative
-- Records are maintained for tax compliance
-
-📜 License
-Private Use Only
-This project is not licensed for redistribution, resale, or third-party use.
-
-## 📝 Development Status
-
-### Phase 1: Foundation (Week 1) - IN PROGRESS
-
-#### ✅ Day 1 Complete (2026-01-07)
-- [x] Repository structure and documentation
-- [x] Environment setup and configuration  
-- [x] Database schema
-- [x] Data fetcher implementation
-
-**Achievements**: 14 tests, complete OHLCV pipeline, immutable risk limits
-
-#### ✅ Day 2 Complete (2026-01-07)
-- [x] ATR (Average True Range) calculation
-- [x] Efficiency Ratio (trend strength)
-- [x] Volume metrics (participation)
-- [x] Feature pipeline integration
-
-**Achievements**: 57 tests, 19 calculated features, complete validation
-
-#### ✅ Day 3 Complete (2026-01-07)
-- [x] Regime classifier (rule-based)
-- [x] Regime confidence scoring
-- [x] Complete pipeline integration (data → features → regime)
-- [x] Regime transition analysis
-- [x] Regime visualization tools
-
-**Achievements**: 85+ tests, 4 regime types, transition analysis, complete documentation
-
-**Week 1 Progress**: 60% complete (Days 1-3 done, Days 4-5 remaining)
-
-#### 🔄 Days 4-5 Planned (Next Session)
-- [ ] Week 1 integration testing
-- [ ] End-to-end validation with real data
-- [ ] Performance benchmarking
-- [ ] Code quality review
-- [ ] Week 1 retrospective
-- [ ] Week 2 detailed planning
-
-### Phase 2: Core System (Week 2) - PENDING
-**Planned**:
-- Risk engine implementation
-- First strategy (simple breakout)
-- Strategy testing framework
-- Execution simulation
-
-### Phase 3: Validation (Week 3) - PENDING
-**Planned**:
-- Backtesting engine
-- Historical regime analysis
-- Strategy performance by regime
-
-### Phase 4: Deployment (Week 4) - PENDING
-**Planned**:
-- Paper trading mode
-- Weekly evaluation system
-- Live micro-capital mode
+The kill switch also auto-engages when drawdown exceeds `MAX_DRAWDOWN_KILL_SWITCH`. State is written to `ops/kill_switch.json`.
 
 ---
 
-## 🎯 Current Capabilities
+## MacBook resilience
 
-### What Works Now
+- **WiFi flicker**: exponential backoff reconnect (up to 10 attempts, capped at 120s wait)
+- **Lid close / SIGTERM**: graceful shutdown — writes final state, closes DB, sends Telegram alert
+- **Thermal management**: polling is rate-limited to exactly one tick per `DATA_UPDATE_INTERVAL` (default 60s). No busy loops.
 
-**Data Pipeline**:
-- ✅ Fetch OHLCV data from Binance
-- ✅ Store in SQLite database
-- ✅ Incremental updates
-- ✅ Data validation
+---
 
-**Feature Engineering** (19 features):
-- ✅ ATR family (volatility measures)
-- ✅ Efficiency Ratio family (trend strength)
-- ✅ Volume family (participation)
-- ✅ Complete validation pipeline
+## Expert critique (5 roles)
 
-**Regime Classification**:
-- ✅ 4 regime types (TREND, RANGE, CHAOS, NO_TRADE)
-- ✅ Confidence scoring (0-1)
-- ✅ Tradability determination
-- ✅ Transition analysis
+### Strategy Expert
+The ADX regime switch is the most important feature — using the wrong strategy for the regime is the #1 cause of losses for rule-based systems. Weakness: ADX lags; a fast regime change (flash crash → recovery) may mis-classify for several bars. **Mitigation**: the 15-minute cooldown and 2-trade daily cap limit exposure during volatile transitions.
 
-**Analysis Tools**:
-- ✅ Regime statistics
-- ✅ Transition matrices
-- ✅ Duration analysis
-- ✅ Timeline visualization
+### Risk Expert
+The 10% kill switch is conservative for a $27 account (that's $2.70 max loss). With Binance's $11 minimum order, you have very few trades before hitting that limit. Consider raising `MAX_DRAWDOWN_KILL_SWITCH` to `0.20` for micro accounts, or widening daily loss to `0.03`. The current settings are appropriate for accounts over $200.
 
-### Week 2 Complete - Risk Engine & Strategy
+### Execution Expert
+The 0.1% taker fee on Binance is correct. With $11 orders, fee = $0.011 per side = $0.022 round-trip. The 2:1 risk-reward (3×ATR TP vs 1.5×ATR SL) means you need a ~33% win rate to break even after fees. Actual win rates on trend-following systems in BTC are typically 40–55% — this is viable.
 
-**Risk Engine** (52+ tests):
-- ✅ Position sizing (fractional risk-based)
-- ✅ Multi-gate validation (6 risk gates)
-- ✅ Capital tracking & drawdown monitoring
-- ✅ Daily limits (trades & losses)
-- ✅ Consecutive loss protection with cooldown
-- ✅ Kill switch (automatic on 5% drawdown)
+### Backtest Expert
+Walk-forward testing avoids the most common overfitting trap (training and testing on the same data). Key risk: the in-sample window (1000 bars) is used only for context, not parameter optimization — meaning there is no actual fitting happening, which is honest but means you're not extracting maximum edge from the data. If you add parameter optimization later, always use the out-of-sample fold for evaluation.
 
-**Strategy Framework** (24+ tests):
-- ✅ Abstract Strategy base class
-- ✅ Signal generation (LONG, SHORT, EXIT, NO_TRADE)
-- ✅ SimpleTrendStrategy implementation
-- ✅ Regime-aware entry/exit logic
-- ✅ ATR-based stop loss calculation
-
-**Trading Workflow** (10+ tests):
-- ✅ Complete orchestration (Strategy → Risk → Decision)
-- ✅ Decision logging and statistics
-- ✅ Approval/rejection tracking
-- ✅ End-to-end integration
-
-**Total Tests**: 226 (100% passing)
-
-### Phase 2: Core System (Week 2) - ✅ COMPLETE
-
-**Completed**: 2026-01-[DATE]
-**Duration**: 7 days
-**Outcome**: Exceeded expectations
-
-#### Deliverables
-- ✅ Risk engine with position sizing
-- ✅ Multi-gate risk validation
-- ✅ Capital & drawdown tracking
-- ✅ Kill switch mechanism
-- ✅ Strategy framework
-- ✅ SimpleTrendStrategy
-- ✅ Complete trading workflow
-- ✅ 150+ new tests (226 total)
-
-**Week 2 Progress**: 100% complete
-
-### Phase 3: Backtesting (Week 3) - 🔄 IN PROGRESS
-
-**Started**: 2026-01-[24]  
-**Current Day**: Day 11 (Foundation Complete)
-
-#### Day 11 Complete - Backtest Foundation ✅
-
-**Backtest Core** (39 tests):
-- ✅ Trade recording with PnL calculation
-- ✅ BacktestResult with metrics
-- ✅ Historical data loader
-- ✅ Backtest engine with execution simulation
-- ✅ Position tracking and management
-- ✅ Stop loss checking
-- ✅ Slippage and fee modeling
-- ✅ No look-ahead bias
-- ✅ Risk engine integration
-
-**Capabilities**:
-- Load historical OHLCV data
-- Calculate features chronologically
-- Classify regimes without future data
-- Generate strategy signals
-- Simulate trade execution
-- Track positions and capital
-- Record all trades with fees
-- Calculate basic metrics
-
-**Total Tests**: 303 (100% passing)
-
-**Next**: Day 12 - Performance Metrics & Analysis
-
-# Week 3: Backtesting Framework - COMPLETE 🎉
-
-## Overview
-The backtesting framework is now feature-complete with professional-grade reporting, visualization, and analysis capabilities.
-
-## What's New
-
-### 1. **Advanced Performance Metrics** (`backtest/metrics.py`)
-- Calmar Ratio
-- Sortino Ratio
-- Value at Risk (VaR)
-- Expected Shortfall (CVaR)
-- Ulcer Index
-- Recovery Factor
-- Risk of Ruin
-- Kelly Criterion
-- Gain to Pain Ratio
-
-### 2. **Professional Visualization** (`backtest/visualization.py`)
-- Equity curve with drawdown
-- Returns distribution plots
-- Monthly returns heatmap
-- Trade analysis charts
-- Professional styling with matplotlib
-
-### 3. **HTML Reporting System** (`backtest/reporting.py`)
-- Interactive HTML reports
-- Responsive design
-- Performance scorecards
-- Trade analysis tables
-- Visualizations embedded
-- Actionable recommendations
-
-### 4. **Integrated Execution** (`scripts/run_integrated_backtest.py`)
-- Single command execution
-- Parameter sweeps
-- Automatic report generation
-- Data export (CSV, JSON)
-- Browser integration
-
-## Quick Start
-
-### Run a Complete Backtest
-```bash
-python scripts/run_integrated_backtest.py
+### Security Expert
+- API keys are in `.env` — never commit this file (it's in `.gitignore`)
+- The bot requests **spot trading permissions only** — do not enable futures/margin on the API key
+- The GitHub token (`Crypto_Survival_System_Token`) should have the minimum scopes needed (repo read/write, no org admin)
+- Kill switch file is local — if the MacBook loses power mid-trade in live mode, the position stays open on Binance. Set a manual stop-loss order on Binance separately as a backstop.
+- Live order placement has no confirmation step — this is by design for automation, but double-check `.env` `TRADING_MODE` before running `--live`.

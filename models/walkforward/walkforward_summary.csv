@@ -1,4 +1,0 @@
-fold,model_dir,auc,accuracy,n_train,n_test
-0,models/walkforward/20260214_230628_fold0,0.49669471153846156,0.5,600,200
-1,models/walkforward/20260214_230629_fold1,0.5205328525641026,0.515,600,200
-2,models/walkforward/20260214_230629_fold2,0.502763541352628,0.52,600,200

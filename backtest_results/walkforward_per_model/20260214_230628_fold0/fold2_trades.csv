@@ -1,2 +1,0 @@
-trade_id,entry_time,exit_time,entry_price,exit_price,side,size,pnl,pnl_percent,exit_reason,fees_paid,duration_hours,max_favorable,max_adverse
-PAPER_20260214_151754_1,2026-01-16 02:00:00,2026-01-16 03:00:00,95408.89531654616,95259.33502654616,long,283.45384608087903,-0.5862213660390619,-0.20681369265026414,take_profit,0.4251807691213186,1.0,0.0,0.0
