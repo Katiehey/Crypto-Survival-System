@@ -25,3 +25,4 @@ ops/kill_switch.json
 .vscode/
 .idea/
 *.swp
+crypto-survival-system-key.pem
