@@ -1,0 +1,25 @@
+{
+  "metric": "sharpe",
+  "best_value": 25.42,
+  "n_trials": 100,
+  "params": {
+    "rsi_trend_buy_min": 64.054,
+    "rsi_trend_sell_max": 42.0781,
+    "rsi_range_buy_max": 23.6636,
+    "rsi_range_sell_min": 64.9741,
+    "adx_threshold": 27.696,
+    "atr_stop_mult": 2.0585,
+    "atr_target_mult": 2.4355,
+    "volume_spike_min": 1.9702
+  },
+  "env_lines": [
+    "RSI_TREND_BUY_MIN=64.1",
+    "RSI_TREND_SELL_MAX=42.1",
+    "RSI_RANGE_BUY_MAX=23.7",
+    "RSI_RANGE_SELL_MIN=65.0",
+    "ADX_TREND_THRESHOLD=27.7",
+    "ATR_STOP_MULT=2.06",
+    "ATR_TARGET_MULT=2.44",
+    "VOLUME_SPIKE_MIN=1.97"
+  ]
+}
