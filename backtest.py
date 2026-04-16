@@ -24,6 +24,7 @@ import numpy as np
 import config
 from agents import TechnicalAgent
 from strategy import RegimeDetector, TradingStrategy
+from ml_filter import extract_features
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ class Trade:
     regime:      str
     stop_loss:   float
     take_profit: float
+    features:    dict = field(default_factory=dict)   # ML training context
 
 
 @dataclass
@@ -166,10 +168,11 @@ class WalkForwardBacktester:
         balance = self.capital
         in_trade = False
         entry_price = stop_loss = take_profit = 0.0
-        entry_time  = None
-        entry_signal = ""
-        entry_regime = ""
-        size_usdt   = 0.0
+        entry_time    = None
+        entry_signal  = ""
+        entry_regime  = ""
+        entry_features: dict = {}
+        size_usdt     = 0.0
 
         lookback = 200  # bars of context needed for indicators (EMA200, ADX, etc.)
 
@@ -214,6 +217,7 @@ class WalkForwardBacktester:
                         regime=entry_regime,
                         stop_loss=stop_loss,
                         take_profit=take_profit,
+                        features=entry_features,
                     ))
                     balance  += net_pnl
                     in_trade  = False
@@ -234,14 +238,15 @@ class WalkForwardBacktester:
                     if order_usdt < config.MIN_ORDER_USDT or order_usdt > balance:
                         continue
 
-                    in_trade     = True
-                    entry_price  = close
-                    stop_loss    = levels["stop_loss"]
-                    take_profit  = levels["take_profit"]
-                    entry_time   = context.index[i]
-                    entry_signal = tech_signal.signal
-                    entry_regime = regime
-                    size_usdt    = order_usdt
+                    in_trade      = True
+                    entry_price   = close
+                    stop_loss     = levels["stop_loss"]
+                    take_profit   = levels["take_profit"]
+                    entry_time    = context.index[i]
+                    entry_signal  = tech_signal.signal
+                    entry_regime  = regime
+                    size_usdt     = order_usdt
+                    entry_features = extract_features(window, tech_signal.signal)
 
         # Close any open trade at the last bar's closing price (market-exit at fold end)
         if in_trade:
@@ -264,6 +269,7 @@ class WalkForwardBacktester:
                 regime=entry_regime,
                 stop_loss=stop_loss,
                 take_profit=take_profit,
+                features=entry_features,
             ))
 
         return trades
@@ -388,3 +394,24 @@ class WalkForwardBacktester:
         equity_df = pd.DataFrame({"equity": result.equity_curve})
         equity_df.to_csv(f"{output_dir}/{ts}_equity.csv", index=False)
         logger.info(f"Results saved to {output_dir}/{ts}_*.csv")
+
+    def extract_training_data(
+        self, result: "BacktestResult"
+    ) -> tuple[list[dict], list[int]]:
+        """
+        Extract (features_list, outcomes) from a completed BacktestResult for ML training.
+        Only includes trades that have captured features (signal BUY/SELL, not fold-end exits).
+        outcomes: 1 = profitable trade, 0 = losing trade
+        """
+        features_list = []
+        outcomes      = []
+        for t in result.trades:
+            if not t.features:
+                continue
+            features_list.append(t.features)
+            outcomes.append(1 if t.pnl_usdt > 0 else 0)
+        logger.info(
+            f"Extracted {len(features_list)} labelled trades for ML training "
+            f"(win_rate={sum(outcomes)/len(outcomes):.1%} if outcomes else 'n/a')"
+        )
+        return features_list, outcomes

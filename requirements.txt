@@ -16,5 +16,11 @@ python-dotenv>=1.0.0
 # Notifications
 # (uses requests, already listed above)
 
+# Hyperparameter optimization (#1)
+optuna>=3.6.0
+
+# ML signal filter — training only; inference uses pure numpy (#3)
+scikit-learn>=1.4.0
+
 # Optional: faster JSON for logs
 ujson>=5.9.0

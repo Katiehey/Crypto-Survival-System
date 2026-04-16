@@ -514,11 +514,14 @@ class TradingBot:
         symbol    = config.TRADING_PAIR
         timeframe = config.TIMEFRAME
 
-        # 1. Fetch market data
+        # 1. Fetch market data (1h primary + 4h for multi-timeframe confirmation)
         df = fetch_ohlcv_with_retry(self.exchange, symbol, timeframe, limit=300)
         if df is None or len(df) < config.MIN_CANDLES_REQUIRED:
             logger.warning(f"Insufficient data ({len(df) if df is not None else 0} bars)")
             return
+
+        # 4h data is optional — if fetch fails we continue without MTF filter
+        df_4h = fetch_ohlcv_with_retry(self.exchange, symbol, "4h", limit=100)
 
         close = df["close"].iloc[-1]
         high  = df["high"].iloc[-1]
@@ -556,10 +559,10 @@ class TradingBot:
         regime_info = self.regime_det.detect(df)
         regime      = regime_info["regime"]
 
-        # 6. Run 4-agent consensus
+        # 6. Run 4-agent consensus (+ MTF filter + ML filter)
         risk_state  = self.risk.state()
         signal, confidence, agent_sigs = self.consensus.decide(
-            df, regime, risk_state, balance, close
+            df, regime, risk_state, balance, close, df_4h=df_4h
         )
 
         # 7. Log decision
@@ -618,6 +621,10 @@ def main():
     parser.add_argument("--send-logs",          action="store_true", help="Compress and send logs, then exit")
     parser.add_argument("--send-logs-via",      default="telegram", choices=["telegram", "email", "both"],
                         help="Delivery method for --send-logs (default: telegram)")
+    parser.add_argument("--train-filter",       action="store_true",
+                        help="Run backtest, train ML signal filter, save to ops/signal_filter.pkl")
+    parser.add_argument("--train-filter-days",  type=int, default=600,
+                        help="Days of history for ML filter training (default: 600)")
     args = parser.parse_args()
 
     if args.toggle_kill_switch:
@@ -633,6 +640,22 @@ def main():
     if args.send_logs:
         ok = send_logs(via=args.send_logs_via)
         print(f"Logs sent: {ok}")
+        return
+
+    if args.train_filter:
+        from backtest import WalkForwardBacktester
+        from ml_filter import SignalFilter
+        print(f"Training ML signal filter on {args.train_filter_days} days of data...")
+        bt  = WalkForwardBacktester()
+        df  = bt.fetch_historical(days=args.train_filter_days)
+        res = bt.run(df)
+        features_list, outcomes = bt.extract_training_data(res)
+        sf = SignalFilter()
+        ok = sf.train(features_list, outcomes)
+        if ok:
+            print(f"ML filter trained on {len(features_list)} trades — saved to ops/signal_filter.pkl")
+        else:
+            print("Training failed — see logs above for details")
         return
 
     if args.backtest:

@@ -39,10 +39,18 @@ class TechnicalAgent:
     Switches logic based on market regime passed in from strategy.
     """
 
-    def analyse(self, df: pd.DataFrame, regime: str) -> AgentSignal:
+    def analyse(
+        self,
+        df: pd.DataFrame,
+        regime: str,
+        df_4h: pd.DataFrame | None = None,
+    ) -> AgentSignal:
         """
-        df must have columns: open, high, low, close, volume
-        regime: "trending" | "ranging"
+        df     : 1h OHLCV window (open, high, low, close, volume)
+        regime : "trending" | "ranging"
+        df_4h  : optional 4h OHLCV window for multi-timeframe confirmation.
+                 When provided, BUY signals require 4h EMA20 > EMA50 (medium-term
+                 uptrend) and SELL signals require 4h EMA20 < EMA50.
         """
         try:
             close = df["close"]
@@ -141,6 +149,17 @@ class TechnicalAgent:
                     reasons.append(f"No mean-reversion trigger (RSI={last_rsi:.1f})")
 
             signal = signals[0]
+
+            # ── Multi-timeframe confirmation (4h) ─────────────────────────────
+            # Only apply when 4h data is available and we have a directional view.
+            # Prevents entering 1h trades that fight the medium-term trend.
+            if signal != "HOLD" and df_4h is not None and len(df_4h) >= 50:
+                if not self._check_4h_alignment(df_4h, signal):
+                    return AgentSignal(
+                        "technical", "HOLD", 0.5,
+                        f"4h trend opposes 1h {signal} — skipping"
+                    )
+
             # Confidence: how many sub-signals agree (each = 0.2 above base 0.4)
             sub_agrees = sum([
                 (signal == "BUY"  and trend_up)              or (signal == "SELL" and trend_down),
@@ -181,6 +200,21 @@ class TechnicalAgent:
         upper = mid + std_dev * std
         lower = mid - std_dev * std
         return upper, mid, lower
+
+    @staticmethod
+    def _check_4h_alignment(df_4h: pd.DataFrame, signal: str) -> bool:
+        """
+        Returns True if the 4h trend supports the proposed signal direction.
+        BUY  → 4h EMA20 must be above 4h EMA50 (medium-term uptrend)
+        SELL → 4h EMA20 must be below 4h EMA50 (medium-term downtrend)
+        """
+        close_4h = df_4h["close"]
+        ema20_4h = close_4h.ewm(span=20, adjust=False).mean()
+        ema50_4h = close_4h.ewm(span=50, adjust=False).mean()
+        if signal == "BUY":
+            return float(ema20_4h.iloc[-1]) > float(ema50_4h.iloc[-1])
+        else:
+            return float(ema20_4h.iloc[-1]) < float(ema50_4h.iloc[-1])
 
 
 # ─── Sentiment Agent ──────────────────────────────────────────────────────────
@@ -399,6 +433,10 @@ class ConsensusEngine:
         self.risk_agent = RiskAgent()
         self.execution  = ExecutionAgent()
 
+        # ML filter — transparent passthrough until trained via --train-filter
+        from ml_filter import SignalFilter
+        self.ml_filter = SignalFilter()
+
     def decide(
         self,
         df: pd.DataFrame,
@@ -406,11 +444,15 @@ class ConsensusEngine:
         risk_state: dict,
         balance: float,
         price: float,
+        df_4h: pd.DataFrame | None = None,
     ) -> tuple[Signal, float, list[AgentSignal]]:
         """
         Returns (final_signal, confidence_score, [all agent signals])
+
+        df_4h: optional 4h OHLCV data for multi-timeframe trend confirmation.
+               When provided, TechnicalAgent blocks signals that oppose the 4h trend.
         """
-        tech_sig = self.technical.analyse(df, regime)
+        tech_sig = self.technical.analyse(df, regime, df_4h)
         sent_sig = self.sentiment.analyse()
         risk_sig = self.risk_agent.analyse(risk_state, df)
 
@@ -431,6 +473,19 @@ class ConsensusEngine:
                 f"[CONSENSUS] Sentiment disagrees: tech={direction}, sent={sent_sig.signal}"
             )
             return "HOLD", 0.0, [tech_sig, sent_sig, risk_sig]
+
+        # ML filter — skip low-probability setups (transparent if not yet trained)
+        if self.ml_filter.is_trained:
+            from ml_filter import extract_features
+            feats = extract_features(df, direction)
+            should_trade, win_prob = self.ml_filter.predict(feats)
+            if not should_trade:
+                ml_sig = AgentSignal(
+                    "ml_filter", "HOLD", round(1.0 - win_prob, 2),
+                    f"ML filter blocked: predicted win_prob={win_prob:.1%} < threshold"
+                )
+                logger.info(f"[CONSENSUS] Blocked by ML filter: {ml_sig.reason}")
+                return "HOLD", 0.0, [tech_sig, sent_sig, risk_sig, ml_sig]
 
         # Execution feasibility check
         exec_sig = self.execution.analyse(balance, price, direction)
