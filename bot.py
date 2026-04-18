@@ -13,6 +13,8 @@ MacBook resilience:
 - Rate-limited polling to avoid CPU/thermal spikes
 """
 
+from __future__ import annotations
+
 import argparse
 import gzip
 import json
@@ -277,12 +279,24 @@ def send_logs(via: str = "telegram") -> bool:
 
 # ─── Exchange connection with resilience ──────────────────────────────────────
 
-def build_exchange(live: bool = False) -> ccxt.binance:
+def build_exchange(live: bool = False):
+    if config.EXCHANGE == "kucoin":
+        params = {
+            "apiKey":          config.KUCOIN_API_KEY,
+            "secret":          config.KUCOIN_API_SECRET,
+            "password":        config.KUCOIN_PASSPHRASE,
+            "enableRateLimit": True,
+            "options":         {"defaultType": "spot"},
+        }
+        logger.info("Exchange: KuCoin")
+        return ccxt.kucoin(params)
+
+    # Default: Binance
     params = {
-        "apiKey":         config.BINANCE_API_KEY,
-        "secret":         config.BINANCE_API_SECRET,
+        "apiKey":          config.BINANCE_API_KEY,
+        "secret":          config.BINANCE_API_SECRET,
         "enableRateLimit": True,
-        "options":        {"defaultType": "spot"},
+        "options":         {"defaultType": "spot"},
     }
     if config.BINANCE_TESTNET:
         params["options"]["urls"] = {
@@ -291,6 +305,7 @@ def build_exchange(live: bool = False) -> ccxt.binance:
                 "private": "https://testnet.binance.vision/api",
             }
         }
+    logger.info("Exchange: Binance")
     return ccxt.binance(params)
 
 

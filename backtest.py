@@ -10,6 +10,8 @@ Walk-forward approach:
 This avoids the lookahead/overfitting problem of a single-period backtest.
 """
 
+from __future__ import annotations
+
 import logging
 import sqlite3
 from dataclasses import dataclass, field

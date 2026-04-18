@@ -9,9 +9,13 @@ from dotenv import load_dotenv
 load_dotenv(override=True)  # .env always takes precedence over shell environment variables
 
 # ─── Exchange ────────────────────────────────────────────────────────────────
+EXCHANGE           = os.getenv("EXCHANGE", "binance")   # "binance" | "kucoin"
 BINANCE_API_KEY    = os.getenv("BINANCE_API_KEY", "")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
 BINANCE_TESTNET    = os.getenv("BINANCE_TESTNET", "false").lower() == "true"
+KUCOIN_API_KEY     = os.getenv("KUCOIN_API_KEY", "")
+KUCOIN_API_SECRET  = os.getenv("KUCOIN_API_SECRET", "")
+KUCOIN_PASSPHRASE  = os.getenv("KUCOIN_PASSPHRASE", "")
 
 # ─── Trading ─────────────────────────────────────────────────────────────────
 TRADING_MODE      = os.getenv("TRADING_MODE", "paper")          # "paper" | "live"

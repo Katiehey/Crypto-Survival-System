@@ -5,6 +5,8 @@ A trade only executes when ALL agents agree on direction.
 Each agent returns: {"signal": "BUY"|"SELL"|"HOLD", "confidence": 0.0-1.0, "reason": str}
 """
 
+from __future__ import annotations
+
 import logging
 import time
 from dataclasses import dataclass

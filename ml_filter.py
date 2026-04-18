@@ -11,6 +11,8 @@ Inference: loaded automatically by ConsensusEngine when ops/signal_filter.pkl ex
 If no model is trained yet, filter is transparent (all signals pass through).
 """
 
+from __future__ import annotations
+
 import logging
 import pickle
 from pathlib import Path
