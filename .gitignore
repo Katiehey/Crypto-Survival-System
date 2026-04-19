@@ -26,3 +26,5 @@ ops/kill_switch.json
 .idea/
 *.swp
 crypto-survival-system-key.pem
+crypto-survival-system-ssh-key-2026-04-18.key
+crypto-survival-system-ssh-key-2026-04-18.key.pub

@@ -67,8 +67,9 @@ def run_optimization(n_trials: int = 100, metric: str = "sharpe") -> dict | None
 
         result = bt.run(df)
 
-        # Penalise parameter sets that produce too few trades (likely overfit)
-        if result.total_trades < 5:
+        # Require at least 20 trades — fewer means the optimizer is cherry-picking
+        # a handful of lucky trades, which inflates Sharpe artificially
+        if result.total_trades < 20:
             return -10.0
 
         if metric == "sharpe":

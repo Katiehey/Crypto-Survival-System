@@ -32,7 +32,7 @@ MAX_RISK_PER_TRADE       = float(os.getenv("MAX_RISK_PER_TRADE", "0.005"))   # 0
 MAX_DAILY_LOSS           = float(os.getenv("MAX_DAILY_LOSS", "0.01"))         # 1%
 MAX_CONSECUTIVE_LOSSES   = int(os.getenv("MAX_CONSECUTIVE_LOSSES", "2"))
 MAX_TRADES_PER_DAY       = int(os.getenv("MAX_TRADES_PER_DAY", "2"))
-MAX_DRAWDOWN_KILL_SWITCH = float(os.getenv("MAX_DRAWDOWN_KILL_SWITCH", "0.10"))  # 10%
+MAX_DRAWDOWN_KILL_SWITCH = float(os.getenv("MAX_DRAWDOWN_KILL_SWITCH", "0.25"))  # 25% — suitable for accounts under $100; tighten to 0.10 above $200
 COOLDOWN_MINUTES         = int(os.getenv("COOLDOWN_MINUTES", "15"))
 
 # ATR multipliers for dynamic SL / TP
