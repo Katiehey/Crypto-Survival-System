@@ -25,6 +25,7 @@ ops/kill_switch.json
 .vscode/
 .idea/
 *.swp
-crypto-survival-system-key.pem
-crypto-survival-system-ssh-key-2026-04-18.key
-crypto-survival-system-ssh-key-2026-04-18.key.pub
+# SSH keys and certificates — NEVER commit
+*.pem
+*.key
+*.key.pub
