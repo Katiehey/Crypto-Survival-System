@@ -60,8 +60,9 @@ class TechnicalAgent:
             reasons = []
 
             # ── Volume filter ─────────────────────────────────────────────────
-            # Only trade on bars with above-average volume (confirms conviction)
-            vol_avg   = df["volume"].rolling(20).mean().iloc[-1]
+            # 50-bar average gives a stable baseline — a 20-bar window gets
+            # inflated too quickly by a short burst, making spikes impossible to hit
+            vol_avg   = df["volume"].rolling(50).mean().iloc[-1]
             vol_spike = df["volume"].iloc[-1] > vol_avg * config.VOLUME_SPIKE_MIN
 
             # ── RSI (14) ──────────────────────────────────────────────────────

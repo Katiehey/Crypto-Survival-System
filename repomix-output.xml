@@ -1,0 +1,2726 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+ops/
+  best_params.json
+  signal_filter.pkl
+.gitignore
+agents.py
+backtest.py
+bot.py
+config.py
+ml_filter.py
+optimize.py
+README.md
+requirements.txt
+risk.py
+strategy.py
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="ops/best_params.json">
+{
+  "metric": "sharpe",
+  "best_value": 25.42,
+  "n_trials": 100,
+  "params": {
+    "rsi_trend_buy_min": 64.054,
+    "rsi_trend_sell_max": 42.0781,
+    "rsi_range_buy_max": 23.6636,
+    "rsi_range_sell_min": 64.9741,
+    "adx_threshold": 27.696,
+    "atr_stop_mult": 2.0585,
+    "atr_target_mult": 2.4355,
+    "volume_spike_min": 1.9702
+  },
+  "env_lines": [
+    "RSI_TREND_BUY_MIN=64.1",
+    "RSI_TREND_SELL_MAX=42.1",
+    "RSI_RANGE_BUY_MAX=23.7",
+    "RSI_RANGE_SELL_MIN=65.0",
+    "ADX_TREND_THRESHOLD=27.7",
+    "ATR_STOP_MULT=2.06",
+    "ATR_TARGET_MULT=2.44",
+    "VOLUME_SPIKE_MIN=1.97"
+  ]
+}
+</file>
+
+<file path="risk.py">
+"""
+risk.py — Position sizing, kill switch, and runtime risk state management.
+
+Handles:
+- Position size calculation (using Binance minimum for small accounts)
+- Kill switch (file-based for manual override + drawdown-triggered)
+- Daily reset logic
+- Cooldown tracking
+"""
+
+import json
+import logging
+import os
+from datetime import datetime, timezone, date
+from pathlib import Path
+
+import config
+
+logger = logging.getLogger(__name__)
+
+
+class RiskEngine:
+    """
+    Central risk state. Lives in memory during a session; persists to DB on trade events.
+    """
+
+    def __init__(self, starting_balance: float = None):
+        bal = starting_balance or config.STARTING_CAPITAL
+        self.peak_balance        = bal
+        self.current_balance     = bal
+        self.daily_start_balance = bal
+        self._daily_date         = date.today()
+        self.consecutive_losses  = 0
+        self.trades_today        = 0
+        self.last_loss_time: datetime | None = None
+        self.kill_switch         = self._load_kill_switch()
+
+    # ─── State snapshot for agents ───────────────────────────────────────────
+
+    def state(self) -> dict:
+        self._maybe_daily_reset()
+        return {
+            "peak_balance":        self.peak_balance,
+            "current_balance":     self.current_balance,
+            "daily_start_balance": self.daily_start_balance,
+            "consecutive_losses":  self.consecutive_losses,
+            "trades_today":        self.trades_today,
+            "last_loss_time":      self.last_loss_time,
+            "kill_switch":         self.kill_switch,
+        }
+
+    # ─── Position sizing ──────────────────────────────────────────────────────
+
+    def position_size_usdt(self) -> float:
+        """
+        For small accounts (<$100): always use Binance minimum order (~$11).
+        For larger accounts: use MAX_RISK_PER_TRADE % of balance.
+        """
+        risk_based = self.current_balance * config.MAX_RISK_PER_TRADE
+        if self.current_balance < 100:
+            size = config.MIN_ORDER_USDT
+        else:
+            size = max(risk_based, config.MIN_ORDER_USDT)
+        return round(min(size, self.current_balance * 0.95), 2)  # never >95% of balance
+
+    # ─── Trade result recording ───────────────────────────────────────────────
+
+    def record_trade(self, pnl_usdt: float):
+        """Call after every closed trade with the net PnL (positive = profit)."""
+        self.current_balance += pnl_usdt
+        self.peak_balance     = max(self.peak_balance, self.current_balance)
+        self.trades_today    += 1
+
+        if pnl_usdt < 0:
+            self.consecutive_losses += 1
+            self.last_loss_time      = datetime.now(timezone.utc)
+            logger.info(f"Loss recorded: ${pnl_usdt:.2f} | consecutive={self.consecutive_losses}")
+        else:
+            self.consecutive_losses = 0
+            logger.info(f"Win recorded:  ${pnl_usdt:.2f} | balance=${self.current_balance:.2f}")
+
+        # Auto-trigger kill switch on excessive drawdown
+        drawdown = (self.peak_balance - self.current_balance) / self.peak_balance
+        if drawdown >= config.MAX_DRAWDOWN_KILL_SWITCH:
+            self._engage_kill_switch(
+                f"Drawdown {drawdown:.1%} exceeded {config.MAX_DRAWDOWN_KILL_SWITCH:.0%} threshold"
+            )
+
+    def update_balance(self, new_balance: float):
+        """Sync balance from exchange (live mode)."""
+        self.current_balance = new_balance
+        self.peak_balance    = max(self.peak_balance, new_balance)
+
+    # ─── Kill switch ──────────────────────────────────────────────────────────
+
+    def _engage_kill_switch(self, reason: str):
+        self.kill_switch = True
+        Path(config.KILL_SWITCH_FILE).parent.mkdir(parents=True, exist_ok=True)
+        with open(config.KILL_SWITCH_FILE, "w") as f:
+            json.dump({
+                "active":    True,
+                "reason":    reason,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }, f, indent=2)
+        logger.critical(f"KILL SWITCH ENGAGED: {reason}")
+
+    def disengage_kill_switch(self):
+        """Manual reset — called from ops or toggle script."""
+        self.kill_switch = False
+        if os.path.exists(config.KILL_SWITCH_FILE):
+            with open(config.KILL_SWITCH_FILE, "w") as f:
+                json.dump({"active": False, "reason": "manually reset"}, f)
+        logger.warning("Kill switch disengaged manually")
+
+    def _load_kill_switch(self) -> bool:
+        try:
+            if os.path.exists(config.KILL_SWITCH_FILE):
+                with open(config.KILL_SWITCH_FILE) as f:
+                    data = json.load(f)
+                return data.get("active", False)
+        except Exception:
+            pass
+        return False
+
+    # ─── Daily reset ──────────────────────────────────────────────────────────
+
+    def _maybe_daily_reset(self):
+        today = date.today()
+        if today != self._daily_date:
+            self._daily_date         = today
+            self.daily_start_balance = self.current_balance
+            self.trades_today        = 0
+            logger.info(f"Daily reset: start balance=${self.current_balance:.2f}")
+
+    # ─── Diagnostics ──────────────────────────────────────────────────────────
+
+    def summary(self) -> str:
+        drawdown = (self.peak_balance - self.current_balance) / self.peak_balance
+        daily_pnl = self.current_balance - self.daily_start_balance
+        return (
+            f"Balance=${self.current_balance:.2f} | Peak=${self.peak_balance:.2f} | "
+            f"Drawdown={drawdown:.1%} | DailyPnL=${daily_pnl:+.2f} | "
+            f"Trades={self.trades_today}/{config.MAX_TRADES_PER_DAY} | "
+            f"ConsecLoss={self.consecutive_losses} | KillSwitch={self.kill_switch}"
+        )
+</file>
+
+<file path="strategy.py">
+"""
+strategy.py — Adaptive market regime detection + trading logic.
+
+Regime detection uses ADX:
+  ADX > 25  → "trending"  → trend-following (EMA crossover + RSI)
+  ADX ≤ 25  → "ranging"   → mean-reversion  (Bollinger + RSI)
+"""
+
+import logging
+import pandas as pd
+
+import config
+
+logger = logging.getLogger(__name__)
+
+
+class RegimeDetector:
+    """
+    Detects whether the market is trending or ranging using ADX(14).
+    Also returns raw ADX value and +DI/-DI for diagnostics.
+    """
+
+    def __init__(self, period: int = 14, threshold: float = None):
+        self.period    = period
+        self.threshold = threshold or config.ADX_TREND_THRESHOLD
+
+    def detect(self, df: pd.DataFrame) -> dict:
+        """
+        Returns:
+            regime: "trending" | "ranging"
+            adx: float
+            plus_di: float
+            minus_di: float
+            direction: "up" | "down" | "unclear" (only meaningful in trending regime)
+        """
+        try:
+            adx, plus_di, minus_di = self._compute_adx(df, self.period)
+            last_adx      = adx.iloc[-1]
+            last_plus_di  = plus_di.iloc[-1]
+            last_minus_di = minus_di.iloc[-1]
+
+            regime = "trending" if last_adx > self.threshold else "ranging"
+
+            if regime == "trending":
+                direction = "up" if last_plus_di > last_minus_di else "down"
+            else:
+                direction = "unclear"
+
+            result = {
+                "regime":    regime,
+                "adx":       round(last_adx, 2),
+                "plus_di":   round(last_plus_di, 2),
+                "minus_di":  round(last_minus_di, 2),
+                "direction": direction,
+            }
+            logger.debug(
+                f"Regime: {regime} (ADX={last_adx:.1f}, +DI={last_plus_di:.1f}, -DI={last_minus_di:.1f})"
+            )
+            return result
+
+        except Exception as e:
+            logger.warning(f"RegimeDetector error: {e}")
+            return {"regime": "ranging", "adx": 0, "plus_di": 0, "minus_di": 0, "direction": "unclear"}
+
+    @staticmethod
+    def _compute_adx(df: pd.DataFrame, period: int = 14):
+        """Pure pandas ADX calculation."""
+        high  = df["high"]
+        low   = df["low"]
+        close = df["close"]
+
+        prev_high  = high.shift(1)
+        prev_low   = low.shift(1)
+        prev_close = close.shift(1)
+
+        # True Range
+        tr = pd.concat([
+            high - low,
+            (high - prev_close).abs(),
+            (low  - prev_close).abs(),
+        ], axis=1).max(axis=1)
+
+        # Directional movement
+        up_move   = high - prev_high
+        down_move = prev_low - low
+
+        plus_dm  = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+        minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+
+        # Wilder smoothing
+        atr      = tr.ewm(alpha=1 / period, adjust=False).mean()
+        plus_di  = 100 * plus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr.replace(0, 1e-10)
+        minus_di = 100 * minus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr.replace(0, 1e-10)
+
+        dx  = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, 1e-10)
+        adx = dx.ewm(alpha=1 / period, adjust=False).mean()
+
+        return adx, plus_di, minus_di
+
+
+class TradingStrategy:
+    """
+    Calculates dynamic stop-loss and take-profit levels based on ATR.
+    Also handles grid level calculation for ranging markets.
+    """
+
+    def __init__(self):
+        self.regime_detector = RegimeDetector()
+
+    def compute_levels(
+        self,
+        df: pd.DataFrame,
+        signal: str,
+        regime: str,
+    ) -> dict:
+        """
+        Returns entry, stop_loss, take_profit, and position_size in USDT.
+        """
+        close = df["close"].iloc[-1]
+        atr   = self._atr(df, 14).iloc[-1]
+
+        if signal == "BUY":
+            entry      = close
+            stop_loss  = entry - config.ATR_STOP_MULT   * atr
+            take_profit = entry + config.ATR_TARGET_MULT * atr
+        elif signal == "SELL":
+            entry      = close
+            stop_loss  = entry + config.ATR_STOP_MULT   * atr
+            take_profit = entry - config.ATR_TARGET_MULT * atr
+        else:
+            return {}
+
+        risk_reward = abs(take_profit - entry) / abs(stop_loss - entry)
+
+        return {
+            "entry":       round(entry, 2),
+            "stop_loss":   round(stop_loss, 2),
+            "take_profit": round(take_profit, 2),
+            "atr":         round(atr, 2),
+            "risk_reward": round(risk_reward, 2),
+            "regime":      regime,
+        }
+
+    @staticmethod
+    def _atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+        high, low, close = df["high"], df["low"], df["close"]
+        prev_close = close.shift(1)
+        tr = pd.concat([
+            high - low,
+            (high - prev_close).abs(),
+            (low  - prev_close).abs(),
+        ], axis=1).max(axis=1)
+        return tr.rolling(period).mean()
+</file>
+
+<file path="ml_filter.py">
+"""
+ml_filter.py — ML-based signal quality filter.
+
+Trains a logistic regression on historical backtest trade outcomes.
+At inference, filters out signals with low predicted win probability.
+
+Training flow:
+    python bot.py --train-filter   # runs backtest, extracts features, trains model
+
+Inference: loaded automatically by ConsensusEngine when ops/signal_filter.pkl exists.
+If no model is trained yet, filter is transparent (all signals pass through).
+"""
+
+from __future__ import annotations
+
+import logging
+import pickle
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+MODEL_PATH = Path("ops/signal_filter.pkl")
+MIN_TRADES_TO_TRAIN = 20  # minimum historical trades needed
+
+# Feature order must never change once a model is trained
+FEATURE_ORDER = [
+    "rsi",
+    "atr_pct",
+    "macd_hist",
+    "ema20_dist",
+    "ema50_dist",
+    "ema200_dist",
+    "vol_ratio",
+    "adx",
+    "is_buy",
+]
+
+
+def extract_features(df: pd.DataFrame, signal: str) -> dict:
+    """
+    Extract ML features from a window of OHLCV data at entry time.
+    Must be called identically in both backtest (training) and live bot (inference).
+
+    df: window of OHLCV bars ending at the entry candle
+    signal: "BUY" or "SELL"
+    """
+    close = df["close"]
+    high  = df["high"]
+    low   = df["low"]
+
+    # ── RSI(14) ────────────────────────────────────────────────────────────────
+    delta = close.diff()
+    gain  = delta.clip(lower=0).rolling(14).mean()
+    loss  = (-delta.clip(upper=0)).rolling(14).mean()
+    rs    = gain / loss.replace(0, 1e-10)
+    rsi   = float((100 - (100 / (1 + rs))).iloc[-1])
+
+    # ── ATR % of price ────────────────────────────────────────────────────────
+    prev_close = close.shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low  - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    atr     = float(tr.rolling(14).mean().iloc[-1])
+    atr_pct = atr / float(close.iloc[-1])
+
+    # ── MACD histogram ────────────────────────────────────────────────────────
+    ema_fast    = close.ewm(span=12, adjust=False).mean()
+    ema_slow    = close.ewm(span=26, adjust=False).mean()
+    macd_line   = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    macd_hist   = float((macd_line - signal_line).iloc[-1])
+
+    # ── EMA distances (% from price) ──────────────────────────────────────────
+    ema20  = close.ewm(span=20,  adjust=False).mean()
+    ema50  = close.ewm(span=50,  adjust=False).mean()
+    ema200 = close.ewm(span=200, adjust=False).mean()
+    lc = float(close.iloc[-1])
+    ema20_dist  = (lc - float(ema20.iloc[-1]))  / lc
+    ema50_dist  = (lc - float(ema50.iloc[-1]))  / lc
+    ema200_dist = (lc - float(ema200.iloc[-1])) / lc
+
+    # ── Volume ratio (current vs 20-bar avg) ──────────────────────────────────
+    vol_avg   = float(df["volume"].rolling(20).mean().iloc[-1])
+    vol_ratio = float(df["volume"].iloc[-1]) / vol_avg if vol_avg > 0 else 1.0
+
+    # ── ADX(14) ───────────────────────────────────────────────────────────────
+    up_move   = high.diff()
+    down_move = -low.diff()
+    plus_dm   = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+    minus_dm  = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+    atr_14    = tr.rolling(14).mean()
+    plus_di   = 100 * (plus_dm.rolling(14).mean() / atr_14.replace(0, 1e-10))
+    minus_di  = 100 * (minus_dm.rolling(14).mean() / atr_14.replace(0, 1e-10))
+    dx        = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, 1e-10)
+    adx       = float(dx.rolling(14).mean().iloc[-1])
+
+    return {
+        "rsi":        rsi,
+        "atr_pct":    atr_pct,
+        "macd_hist":  macd_hist,
+        "ema20_dist": ema20_dist,
+        "ema50_dist": ema50_dist,
+        "ema200_dist": ema200_dist,
+        "vol_ratio":  vol_ratio,
+        "adx":        adx,
+        "is_buy":     1.0 if signal == "BUY" else 0.0,
+    }
+
+
+def features_to_array(features: dict) -> np.ndarray:
+    """Convert a feature dict to a numpy array in the canonical feature order."""
+    return np.array([features[k] for k in FEATURE_ORDER], dtype=float)
+
+
+class SignalFilter:
+    """
+    Logistic regression filter trained on historical backtest trade outcomes.
+
+    - sklearn is only required for training (--train-filter).
+    - Inference uses stored weights/bias — no sklearn dependency at runtime.
+    - When no model exists yet, predict() is a transparent passthrough.
+    """
+
+    THRESHOLD = 0.55  # require >55% predicted win probability
+
+    def __init__(self):
+        self._model: dict | None = None
+        self._load()
+
+    @property
+    def is_trained(self) -> bool:
+        return self._model is not None
+
+    def _load(self):
+        if MODEL_PATH.exists():
+            try:
+                with open(MODEL_PATH, "rb") as f:
+                    self._model = pickle.load(f)
+                logger.info(
+                    f"ML filter loaded — "
+                    f"n={self._model.get('n_samples', '?')} trades, "
+                    f"base_win_rate={self._model.get('win_rate', 0):.1%}"
+                )
+            except Exception as e:
+                logger.warning(f"ML filter load failed: {e}")
+                self._model = None
+
+    def predict(self, features: dict) -> tuple[bool, float]:
+        """
+        Returns (should_trade, win_probability).
+        If no model trained yet: returns (True, 0.5) — transparent passthrough.
+        On any error: returns (True, 0.5) — fail-open, never blocks trading.
+        """
+        if not self.is_trained:
+            return True, 0.5
+        try:
+            x = features_to_array(features).reshape(1, -1)
+            x_norm = (x - self._model["mean"]) / (self._model["std"] + 1e-10)
+            logit  = float(
+                np.dot(x_norm, self._model["weights"]) + self._model["bias"]
+            )
+            prob = float(1.0 / (1.0 + np.exp(-logit)))
+            return prob >= self.THRESHOLD, round(prob, 3)
+        except Exception as e:
+            logger.warning(f"ML filter predict error: {e}")
+            return True, 0.5
+
+    def train(self, features_list: list[dict], outcomes: list[int]) -> bool:
+        """
+        Train on a list of feature dicts and binary outcomes (1=win, 0=loss).
+        Saves model to ops/signal_filter.pkl. Returns True on success.
+
+        Requires scikit-learn (pip install scikit-learn).
+        """
+        try:
+            from sklearn.linear_model import LogisticRegression
+            from sklearn.preprocessing import StandardScaler
+            from sklearn.model_selection import cross_val_score
+        except ImportError:
+            logger.error("scikit-learn not installed — run: pip install scikit-learn")
+            return False
+
+        n = len(features_list)
+        if n < MIN_TRADES_TO_TRAIN:
+            logger.warning(
+                f"Only {n} trades — need {MIN_TRADES_TO_TRAIN} to train the filter. "
+                f"Run a longer backtest (try --backtest-days 600) first."
+            )
+            return False
+
+        X = np.array([features_to_array(f) for f in features_list])
+        y = np.array(outcomes, dtype=int)
+
+        scaler = StandardScaler()
+        X_sc   = scaler.fit_transform(X)
+
+        # C=0.5 gives mild L2 regularisation — avoids overfitting on small datasets
+        clf = LogisticRegression(C=0.5, max_iter=1000, random_state=42)
+
+        if n >= 30:
+            folds = min(5, n // 6)
+            cv = cross_val_score(clf, X_sc, y, cv=folds, scoring="accuracy")
+            logger.info(
+                f"ML filter cross-val accuracy: {cv.mean():.1%} ± {cv.std():.1%} "
+                f"({folds}-fold)"
+            )
+
+        clf.fit(X_sc, y)
+
+        # Store as pure numpy so inference needs no sklearn
+        model_data = {
+            "mean":      scaler.mean_,
+            "std":       scaler.scale_,
+            "weights":   clf.coef_[0],
+            "bias":      clf.intercept_[0],
+            "n_samples": n,
+            "win_rate":  float(y.mean()),
+        }
+
+        MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(MODEL_PATH, "wb") as f:
+            pickle.dump(model_data, f)
+
+        self._model = model_data
+        logger.info(
+            f"ML filter trained: {n} samples, "
+            f"win_rate={y.mean():.1%} — saved to {MODEL_PATH}"
+        )
+        return True
+</file>
+
+<file path="optimize.py">
+"""
+optimize.py — Optuna hyperparameter optimizer.
+
+Finds the best strategy parameters by running the walk-forward backtest
+as the objective function across hundreds of parameter combinations.
+Parameters are tested against 400 days of real BTC/USDT 1h history.
+
+Usage:
+    python optimize.py                        # 100 trials, maximize Sharpe
+    python optimize.py --trials 200           # more trials = better search
+    python optimize.py --metric profit_factor # alternative objective
+    python optimize.py --metric win_rate
+
+Results are saved to ops/best_params.json.
+Copy the printed .env lines to your .env to activate the best params.
+"""
+
+import argparse
+import json
+import logging
+from pathlib import Path
+
+import config  # import first so we can override its module-level attributes
+
+logging.basicConfig(
+    level=logging.WARNING,   # suppress per-fold backtest noise during search
+    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+)
+logger = logging.getLogger("optimize")
+
+BEST_PARAMS_PATH = Path("ops/best_params.json")
+
+
+def run_optimization(n_trials: int = 100, metric: str = "sharpe") -> dict | None:
+    try:
+        import optuna
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+    except ImportError:
+        print("Optuna not installed. Run: pip install optuna")
+        return None
+
+    from backtest import WalkForwardBacktester
+
+    print("Fetching historical data (this may take ~30s)...")
+    bt = WalkForwardBacktester()
+    df = bt.fetch_historical(days=400)
+    print(f"Fetched {len(df)} candles. Starting {n_trials}-trial search...\n")
+
+    def objective(trial: "optuna.Trial") -> float:  # type: ignore[name-defined]
+        # ── Override config module attributes for this trial ──────────────────
+        # (Python modules are singletons — all code in the same process sees this)
+        config.RSI_TREND_BUY_MIN   = trial.suggest_float("rsi_trend_buy_min",  50.0, 65.0)
+        config.RSI_TREND_SELL_MAX  = trial.suggest_float("rsi_trend_sell_max", 35.0, 50.0)
+        config.RSI_RANGE_BUY_MAX   = trial.suggest_float("rsi_range_buy_max",  22.0, 38.0)
+        config.RSI_RANGE_SELL_MIN  = trial.suggest_float("rsi_range_sell_min", 62.0, 78.0)
+        config.ADX_TREND_THRESHOLD = trial.suggest_float("adx_threshold",      18.0, 35.0)
+        config.ATR_STOP_MULT       = trial.suggest_float("atr_stop_mult",       1.0,  2.5)
+        config.ATR_TARGET_MULT     = trial.suggest_float("atr_target_mult",     1.5,  4.5)
+        config.VOLUME_SPIKE_MIN    = trial.suggest_float("volume_spike_min",    1.0,  2.0)
+
+        # Re-instantiate classes that read config at construction time
+        from agents import TechnicalAgent
+        from strategy import RegimeDetector, TradingStrategy
+        bt.technical  = TechnicalAgent()
+        bt.regime_det = RegimeDetector()
+        bt.strategy   = TradingStrategy()
+
+        result = bt.run(df)
+
+        # Require at least 20 trades — fewer means the optimizer is cherry-picking
+        # a handful of lucky trades, which inflates Sharpe artificially
+        if result.total_trades < 20:
+            return -10.0
+
+        if metric == "sharpe":
+            return result.sharpe_ratio
+        elif metric == "profit_factor":
+            return min(result.profit_factor, 5.0)   # cap to avoid outlier dominance
+        elif metric == "win_rate":
+            return result.win_rate_pct
+        return result.sharpe_ratio
+
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
+
+    best   = study.best_params
+    best_v = study.best_value
+    sep    = "─" * 58
+
+    print(f"\n{sep}")
+    print(f"  OPTIMIZATION COMPLETE")
+    print(f"  Best {metric}: {best_v:.4f}  |  Trials: {n_trials}")
+    print(sep)
+    print()
+    print("  .env lines to copy  (paste into your .env file to activate):")
+    print()
+    env_lines = [
+        f"RSI_TREND_BUY_MIN={best['rsi_trend_buy_min']:.1f}",
+        f"RSI_TREND_SELL_MAX={best['rsi_trend_sell_max']:.1f}",
+        f"RSI_RANGE_BUY_MAX={best['rsi_range_buy_max']:.1f}",
+        f"RSI_RANGE_SELL_MIN={best['rsi_range_sell_min']:.1f}",
+        f"ADX_TREND_THRESHOLD={best['adx_threshold']:.1f}",
+        f"ATR_STOP_MULT={best['atr_stop_mult']:.2f}",
+        f"ATR_TARGET_MULT={best['atr_target_mult']:.2f}",
+        f"VOLUME_SPIKE_MIN={best['volume_spike_min']:.2f}",
+    ]
+    for line in env_lines:
+        print(f"  {line}")
+    print()
+    print(f"  Saved full results → {BEST_PARAMS_PATH}")
+    print(f"{sep}\n")
+
+    output = {
+        "metric":     metric,
+        "best_value": round(best_v, 4),
+        "n_trials":   n_trials,
+        "params":     {k: round(v, 4) for k, v in best.items()},
+        "env_lines":  env_lines,
+    }
+    BEST_PARAMS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(BEST_PARAMS_PATH, "w") as f:
+        json.dump(output, f, indent=2)
+
+    return output
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Strategy hyperparameter optimizer")
+    parser.add_argument(
+        "--trials", type=int, default=100,
+        help="Number of Optuna trials (default: 100, more = better search)",
+    )
+    parser.add_argument(
+        "--metric", choices=["sharpe", "profit_factor", "win_rate"],
+        default="sharpe",
+        help="Objective to maximise (default: sharpe)",
+    )
+    args = parser.parse_args()
+    run_optimization(args.trials, args.metric)
+
+
+if __name__ == "__main__":
+    main()
+</file>
+
+<file path="agents.py">
+"""
+agents.py — The 4-agent consensus decision system.
+
+A trade only executes when ALL agents agree on direction.
+Each agent returns: {"signal": "BUY"|"SELL"|"HOLD", "confidence": 0.0-1.0, "reason": str}
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass
+from typing import Literal
+from datetime import datetime, timezone
+
+import pandas as pd
+import feedparser
+from bs4 import BeautifulSoup
+import requests
+
+import config
+
+logger = logging.getLogger(__name__)
+
+Signal = Literal["BUY", "SELL", "HOLD"]
+
+
+@dataclass
+class AgentSignal:
+    agent: str
+    signal: Signal
+    confidence: float   # 0.0 – 1.0
+    reason: str
+
+
+# ─── Technical Agent ──────────────────────────────────────────────────────────
+
+class TechnicalAgent:
+    """
+    Uses RSI, MACD, Bollinger Bands, and Moving Averages.
+    Switches logic based on market regime passed in from strategy.
+    """
+
+    def analyse(
+        self,
+        df: pd.DataFrame,
+        regime: str,
+        df_4h: pd.DataFrame | None = None,
+    ) -> AgentSignal:
+        """
+        df     : 1h OHLCV window (open, high, low, close, volume)
+        regime : "trending" | "ranging"
+        df_4h  : optional 4h OHLCV window for multi-timeframe confirmation.
+                 When provided, BUY signals require 4h EMA20 > EMA50 (medium-term
+                 uptrend) and SELL signals require 4h EMA20 < EMA50.
+        """
+        try:
+            close = df["close"]
+            signals = []
+            reasons = []
+
+            # ── Volume filter ─────────────────────────────────────────────────
+            # Only trade on bars with above-average volume (confirms conviction)
+            vol_avg   = df["volume"].rolling(20).mean().iloc[-1]
+            vol_spike = df["volume"].iloc[-1] > vol_avg * config.VOLUME_SPIKE_MIN
+
+            # ── RSI (14) ──────────────────────────────────────────────────────
+            rsi = self._rsi(close, 14)
+            last_rsi = rsi.iloc[-1]
+
+            # ── MACD ──────────────────────────────────────────────────────────
+            macd_line, signal_line = self._macd(close)
+            hist         = macd_line - signal_line
+            macd_hist    = hist.iloc[-1]
+            macd_hist_1  = hist.iloc[-2]   # previous bar
+            # Crossover within last 2 bars — enter close to the actual cross, not late
+            macd_cross_up   = (macd_line.iloc[-1] > signal_line.iloc[-1] and
+                               macd_line.iloc[-2] <= signal_line.iloc[-2])
+            macd_cross_down = (macd_line.iloc[-1] < signal_line.iloc[-1] and
+                               macd_line.iloc[-2] >= signal_line.iloc[-2])
+            # Histogram momentum: histogram must be expanding (gaining strength)
+            hist_expanding_up   = macd_hist > 0 and macd_hist > macd_hist_1
+            hist_expanding_down = macd_hist < 0 and macd_hist < macd_hist_1
+
+            # ── Bollinger Bands (20, 2σ) ──────────────────────────────────────
+            bb_upper, bb_mid, bb_lower = self._bollinger(close, 20, 2)
+            last_close = close.iloc[-1]
+            bb_width = (bb_upper.iloc[-1] - bb_lower.iloc[-1]) / bb_mid.iloc[-1]
+            # Avoid mean-reversion trades when bands are very narrow (low-vol squeeze)
+            bb_wide_enough = bb_width > 0.01  # bands span at least 1% of price
+
+            # ── Moving Averages ───────────────────────────────────────────────
+            ema20  = close.ewm(span=20,  adjust=False).mean()
+            ema50  = close.ewm(span=50,  adjust=False).mean()
+            ema200 = close.ewm(span=200, adjust=False).mean()
+            trend_up   = ema20.iloc[-1] > ema50.iloc[-1] > ema200.iloc[-1]
+            trend_down = ema20.iloc[-1] < ema50.iloc[-1] < ema200.iloc[-1]
+            # EMA slope: short-term trend must be accelerating, not exhausted
+            ema20_slope_up   = ema20.iloc[-1] > ema20.iloc[-3]
+            ema20_slope_down = ema20.iloc[-1] < ema20.iloc[-3]
+            # 200 EMA macro filter: only BUY when price is above long-term trend.
+            # In trending mode this is already guaranteed by trend_up (EMA20>EMA50>EMA200),
+            # but we keep it explicitly for ranging-mode BUY to block bear-market dip catches.
+            above_ema200 = last_close > ema200.iloc[-1]
+
+            if not vol_spike:
+                # Low-volume bar: any signal here is likely a fake-out — skip it
+                return AgentSignal("technical", "HOLD", 0.5,
+                                   f"Low volume (bar={df['volume'].iloc[-1]:.0f} < {vol_avg*config.VOLUME_SPIKE_MIN:.0f}) — skipping")
+
+            if regime == "trending":
+                # Trend-following: all conditions must align including macro trend filter
+                # trend_up = EMA20>EMA50>EMA200, which already implies price > EMA200
+                if (trend_up and macd_cross_up and hist_expanding_up
+                        and last_rsi > config.RSI_TREND_BUY_MIN and ema20_slope_up):
+                    signals.append("BUY")
+                    reasons.append(
+                        f"Trend UP: EMA stack, MACD cross+expanding, vol spike, RSI={last_rsi:.1f}"
+                    )
+                elif (not config.LONG_ONLY and trend_down and macd_cross_down
+                        and hist_expanding_down
+                        and last_rsi < config.RSI_TREND_SELL_MAX and ema20_slope_down):
+                    signals.append("SELL")
+                    reasons.append(
+                        f"Trend DOWN: EMA stack, MACD cross+expanding, RSI={last_rsi:.1f}"
+                    )
+                else:
+                    signals.append("HOLD")
+                    reasons.append(
+                        f"Trend — conditions not met (RSI={last_rsi:.1f}, trend_up={trend_up})"
+                    )
+
+            else:  # ranging / mean reversion
+                # Only buy dips that are above the 200 EMA — not catching falling knives
+                if (bb_wide_enough and last_close <= bb_lower.iloc[-1]
+                        and last_rsi < config.RSI_RANGE_BUY_MAX
+                        and above_ema200):
+                    signals.append("BUY")
+                    reasons.append(
+                        f"Mean reversion BUY: below lower BB, above EMA200, RSI={last_rsi:.1f}"
+                    )
+                elif (not config.LONG_ONLY and bb_wide_enough
+                        and last_close >= bb_upper.iloc[-1]
+                        and last_rsi > config.RSI_RANGE_SELL_MIN):
+                    signals.append("SELL")
+                    reasons.append(
+                        f"Mean reversion SELL: above upper BB, RSI={last_rsi:.1f}"
+                    )
+                else:
+                    signals.append("HOLD")
+                    reasons.append(f"No mean-reversion trigger (RSI={last_rsi:.1f})")
+
+            signal = signals[0]
+
+            # ── Multi-timeframe confirmation (4h) ─────────────────────────────
+            # Only apply when 4h data is available and we have a directional view.
+            # Prevents entering 1h trades that fight the medium-term trend.
+            if signal != "HOLD" and df_4h is not None and len(df_4h) >= 50:
+                if not self._check_4h_alignment(df_4h, signal):
+                    return AgentSignal(
+                        "technical", "HOLD", 0.5,
+                        f"4h trend opposes 1h {signal} — skipping"
+                    )
+
+            # Confidence: how many sub-signals agree (each = 0.2 above base 0.4)
+            sub_agrees = sum([
+                (signal == "BUY"  and trend_up)              or (signal == "SELL" and trend_down),
+                (signal == "BUY"  and hist_expanding_up)     or (signal == "SELL" and hist_expanding_down),
+                (signal == "BUY"  and last_rsi > config.RSI_TREND_BUY_MIN) or
+                (signal == "SELL" and last_rsi < config.RSI_TREND_SELL_MAX),
+            ])
+            confidence = 0.4 + 0.2 * sub_agrees if signal != "HOLD" else 0.5
+
+            return AgentSignal("technical", signal, round(confidence, 2), reasons[0])
+
+        except Exception as e:
+            logger.warning(f"TechnicalAgent error: {e}")
+            return AgentSignal("technical", "HOLD", 0.0, f"Error: {e}")
+
+    # ── Indicator helpers (pure pandas, no TA-Lib dependency) ─────────────────
+
+    @staticmethod
+    def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
+        delta = series.diff()
+        gain  = delta.clip(lower=0).rolling(period).mean()
+        loss  = (-delta.clip(upper=0)).rolling(period).mean()
+        rs    = gain / loss.replace(0, 1e-10)
+        return 100 - (100 / (1 + rs))
+
+    @staticmethod
+    def _macd(series: pd.Series, fast=12, slow=26, signal=9):
+        ema_fast   = series.ewm(span=fast,   adjust=False).mean()
+        ema_slow   = series.ewm(span=slow,   adjust=False).mean()
+        macd_line  = ema_fast - ema_slow
+        signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+        return macd_line, signal_line
+
+    @staticmethod
+    def _bollinger(series: pd.Series, period=20, std_dev=2):
+        mid   = series.rolling(period).mean()
+        std   = series.rolling(period).std()
+        upper = mid + std_dev * std
+        lower = mid - std_dev * std
+        return upper, mid, lower
+
+    @staticmethod
+    def _check_4h_alignment(df_4h: pd.DataFrame, signal: str) -> bool:
+        """
+        Returns True if the 4h trend supports the proposed signal direction.
+        BUY  → 4h EMA20 must be above 4h EMA50 (medium-term uptrend)
+        SELL → 4h EMA20 must be below 4h EMA50 (medium-term downtrend)
+        """
+        close_4h = df_4h["close"]
+        ema20_4h = close_4h.ewm(span=20, adjust=False).mean()
+        ema50_4h = close_4h.ewm(span=50, adjust=False).mean()
+        if signal == "BUY":
+            return float(ema20_4h.iloc[-1]) > float(ema50_4h.iloc[-1])
+        else:
+            return float(ema20_4h.iloc[-1]) < float(ema50_4h.iloc[-1])
+
+
+# ─── Sentiment Agent ──────────────────────────────────────────────────────────
+
+class SentimentAgent:
+    """
+    Pulls free crypto news via RSS feeds and scores headlines.
+    Uses a keyword-based approach — no paid API needed.
+    """
+
+    BULLISH_WORDS = [
+        "surge", "rally", "bull", "breakout", "record", "high", "adoption",
+        "inflow", "etf", "institutional", "buy", "gain", "rise", "up",
+        "positive", "growth", "boost", "milestone", "approval",
+    ]
+    BEARISH_WORDS = [
+        "crash", "drop", "bear", "plunge", "hack", "ban", "regulation",
+        "sell", "loss", "fear", "panic", "dump", "warning", "decline",
+        "outflow", "red", "collapse", "fraud", "lawsuit", "debt",
+    ]
+
+    def __init__(self):
+        self._cache: dict = {}
+        self._cache_time: float = 0
+
+    def analyse(self) -> AgentSignal:
+        try:
+            score = self._get_score()
+
+            if score > 0.15:
+                return AgentSignal("sentiment", "BUY",  min(0.5 + score, 0.9),
+                                   f"Bullish sentiment score={score:+.2f}")
+            elif score < -0.15:
+                return AgentSignal("sentiment", "SELL", min(0.5 + abs(score), 0.9),
+                                   f"Bearish sentiment score={score:+.2f}")
+            else:
+                return AgentSignal("sentiment", "HOLD", 0.5,
+                                   f"Neutral sentiment score={score:+.2f}")
+
+        except Exception as e:
+            logger.warning(f"SentimentAgent error: {e}")
+            # On failure, return neutral (don't block trade)
+            return AgentSignal("sentiment", "HOLD", 0.5, f"Feed error — neutral: {e}")
+
+    def _get_score(self) -> float:
+        """Returns -1.0 (very bearish) to +1.0 (very bullish). Cached 5 minutes."""
+        now = time.time()
+        if now - self._cache_time < config.SENTIMENT_CACHE_SECONDS and self._cache:
+            return self._cache["score"]
+
+        headlines = self._fetch_headlines()
+        if not headlines:
+            return 0.0
+
+        scores = []
+        for headline in headlines:
+            h = headline.lower()
+            bull = sum(1 for w in self.BULLISH_WORDS if w in h)
+            bear = sum(1 for w in self.BEARISH_WORDS if w in h)
+            if bull + bear > 0:
+                scores.append((bull - bear) / (bull + bear))
+
+        score = sum(scores) / len(scores) if scores else 0.0
+        self._cache = {"score": score}
+        self._cache_time = now
+        logger.debug(f"Sentiment: {len(headlines)} headlines, score={score:+.3f}")
+        return score
+
+    def _fetch_headlines(self) -> list[str]:
+        headlines = []
+        for feed_url in config.SENTIMENT_FEEDS:
+            try:
+                feed = feedparser.parse(feed_url)
+                for entry in feed.entries[:10]:
+                    headlines.append(entry.get("title", ""))
+            except Exception as e:
+                logger.debug(f"Feed error {feed_url}: {e}")
+        return [h for h in headlines if h]
+
+
+# ─── Risk Agent ───────────────────────────────────────────────────────────────
+
+class RiskAgent:
+    """
+    Approves or blocks a trade based on:
+    - Current drawdown vs kill-switch threshold
+    - Daily loss limit
+    - Consecutive losses (cooldown)
+    - Volatility (ATR)
+    - Trades per day
+    """
+
+    def analyse(self, risk_state: dict, df: pd.DataFrame) -> AgentSignal:
+        """
+        risk_state keys:
+            peak_balance, current_balance, daily_start_balance,
+            consecutive_losses, trades_today, last_loss_time, kill_switch
+        """
+        try:
+            # Kill switch
+            if risk_state.get("kill_switch"):
+                return AgentSignal("risk", "HOLD", 1.0, "Kill switch active — no trading")
+
+            balance  = risk_state["current_balance"]
+            peak     = risk_state["peak_balance"]
+            day_start = risk_state["daily_start_balance"]
+
+            # Drawdown check
+            drawdown = (peak - balance) / peak if peak > 0 else 0
+            if drawdown >= config.MAX_DRAWDOWN_KILL_SWITCH:
+                return AgentSignal("risk", "HOLD", 1.0,
+                                   f"Drawdown {drawdown:.1%} ≥ kill-switch {config.MAX_DRAWDOWN_KILL_SWITCH:.0%}")
+
+            # Daily loss limit
+            daily_loss = (day_start - balance) / day_start if day_start > 0 else 0
+            if daily_loss >= config.MAX_DAILY_LOSS:
+                return AgentSignal("risk", "HOLD", 1.0,
+                                   f"Daily loss {daily_loss:.1%} ≥ limit {config.MAX_DAILY_LOSS:.0%}")
+
+            # Trades per day
+            if risk_state["trades_today"] >= config.MAX_TRADES_PER_DAY:
+                return AgentSignal("risk", "HOLD", 0.9,
+                                   f"Max trades/day reached ({config.MAX_TRADES_PER_DAY})")
+
+            # Cooldown after consecutive losses
+            consec = risk_state["consecutive_losses"]
+            if consec >= config.MAX_CONSECUTIVE_LOSSES:
+                last_loss = risk_state.get("last_loss_time")
+                if last_loss:
+                    elapsed = (datetime.now(timezone.utc) - last_loss).total_seconds() / 60
+                    if elapsed < config.COOLDOWN_MINUTES:
+                        remaining = config.COOLDOWN_MINUTES - elapsed
+                        return AgentSignal("risk", "HOLD", 0.9,
+                                           f"Cooldown active — {remaining:.0f}m remaining after {consec} losses")
+
+            # ATR-based volatility gate — don't trade when volatility is extreme
+            atr = self._atr(df, 14).iloc[-1]
+            close = df["close"].iloc[-1]
+            atr_pct = atr / close
+            if atr_pct > 0.04:  # ATR > 4% of price — market is very wild
+                return AgentSignal("risk", "HOLD", 0.7,
+                                   f"Excessive volatility: ATR={atr_pct:.1%} of price")
+
+            confidence = 1.0 - (drawdown / config.MAX_DRAWDOWN_KILL_SWITCH) * 0.5
+            return AgentSignal("risk", "BUY", round(confidence, 2),
+                               f"Risk OK: drawdown={drawdown:.1%}, daily_loss={daily_loss:.1%}, ATR={atr_pct:.2%}")
+
+        except Exception as e:
+            logger.warning(f"RiskAgent error: {e}")
+            return AgentSignal("risk", "HOLD", 0.0, f"Error — defaulting to HOLD: {e}")
+
+    @staticmethod
+    def _atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+        high, low, close = df["high"], df["low"], df["close"]
+        prev_close = close.shift(1)
+        tr = pd.concat([
+            high - low,
+            (high - prev_close).abs(),
+            (low  - prev_close).abs(),
+        ], axis=1).max(axis=1)
+        return tr.rolling(period).mean()
+
+
+# ─── Execution Agent ──────────────────────────────────────────────────────────
+
+class ExecutionAgent:
+    """
+    Checks fees, slippage, and minimum order size before approving execution.
+    Also verifies the exchange is reachable.
+    """
+
+    BINANCE_TAKER_FEE = 0.001   # 0.1%
+    SLIPPAGE_ESTIMATE = 0.0005  # 0.05% conservative estimate
+
+    def analyse(self, balance: float, price: float, signal: Signal) -> AgentSignal:
+        try:
+            # Minimum order check
+            order_usdt = max(config.MIN_ORDER_USDT, balance * config.MAX_RISK_PER_TRADE)
+            if balance < config.MIN_ORDER_USDT:
+                return AgentSignal("execution", "HOLD", 1.0,
+                                   f"Balance ${balance:.2f} below minimum order ${config.MIN_ORDER_USDT}")
+
+            # Fee + slippage impact check
+            round_trip_cost = (self.BINANCE_TAKER_FEE + self.SLIPPAGE_ESTIMATE) * 2
+            breakeven_move  = round_trip_cost  # price must move this much to profit
+            atr_required    = breakeven_move   # sanity: we want ATR > breakeven
+
+            reason = (
+                f"Execution OK: order=${order_usdt:.2f}, "
+                f"fees={self.BINANCE_TAKER_FEE:.2%}, "
+                f"slip={self.SLIPPAGE_ESTIMATE:.2%}, "
+                f"breakeven={breakeven_move:.3%}"
+            )
+
+            # Signal passthrough — execution agent gates on feasibility, not direction
+            return AgentSignal("execution", signal if signal != "HOLD" else "HOLD",
+                               0.8, reason)
+
+        except Exception as e:
+            logger.warning(f"ExecutionAgent error: {e}")
+            return AgentSignal("execution", "HOLD", 0.0, f"Error: {e}")
+
+
+# ─── Consensus Engine ─────────────────────────────────────────────────────────
+
+class ConsensusEngine:
+    """
+    Collects signals from all 4 agents and makes the final go/no-go decision.
+    Rule: ALL agents that have an opinion must agree. A HOLD from Risk or Execution
+    always blocks. Technical and Sentiment must agree on direction.
+    """
+
+    def __init__(self):
+        self.technical = TechnicalAgent()
+        self.sentiment  = SentimentAgent()
+        self.risk_agent = RiskAgent()
+        self.execution  = ExecutionAgent()
+
+        # ML filter — transparent passthrough until trained via --train-filter
+        from ml_filter import SignalFilter
+        self.ml_filter = SignalFilter()
+
+    def decide(
+        self,
+        df: pd.DataFrame,
+        regime: str,
+        risk_state: dict,
+        balance: float,
+        price: float,
+        df_4h: pd.DataFrame | None = None,
+    ) -> tuple[Signal, float, list[AgentSignal]]:
+        """
+        Returns (final_signal, confidence_score, [all agent signals])
+
+        df_4h: optional 4h OHLCV data for multi-timeframe trend confirmation.
+               When provided, TechnicalAgent blocks signals that oppose the 4h trend.
+        """
+        tech_sig = self.technical.analyse(df, regime, df_4h)
+        sent_sig = self.sentiment.analyse()
+        risk_sig = self.risk_agent.analyse(risk_state, df)
+
+        # Risk HOLD is always a hard block
+        if risk_sig.signal == "HOLD":
+            logger.info(f"[CONSENSUS] Blocked by Risk: {risk_sig.reason}")
+            return "HOLD", 0.0, [tech_sig, sent_sig, risk_sig]
+
+        # Technical must have a directional view
+        if tech_sig.signal == "HOLD":
+            logger.info(f"[CONSENSUS] No signal from Technical: {tech_sig.reason}")
+            return "HOLD", 0.0, [tech_sig, sent_sig, risk_sig]
+
+        # Sentiment must not oppose (HOLD is neutral — allowed)
+        direction = tech_sig.signal
+        if sent_sig.signal not in (direction, "HOLD"):
+            logger.info(
+                f"[CONSENSUS] Sentiment disagrees: tech={direction}, sent={sent_sig.signal}"
+            )
+            return "HOLD", 0.0, [tech_sig, sent_sig, risk_sig]
+
+        # ML filter — skip low-probability setups (transparent if not yet trained)
+        if self.ml_filter.is_trained:
+            from ml_filter import extract_features
+            feats = extract_features(df, direction)
+            should_trade, win_prob = self.ml_filter.predict(feats)
+            if not should_trade:
+                ml_sig = AgentSignal(
+                    "ml_filter", "HOLD", round(1.0 - win_prob, 2),
+                    f"ML filter blocked: predicted win_prob={win_prob:.1%} < threshold"
+                )
+                logger.info(f"[CONSENSUS] Blocked by ML filter: {ml_sig.reason}")
+                return "HOLD", 0.0, [tech_sig, sent_sig, risk_sig, ml_sig]
+
+        # Execution feasibility check
+        exec_sig = self.execution.analyse(balance, price, direction)
+        if exec_sig.signal == "HOLD":
+            logger.info(f"[CONSENSUS] Blocked by Execution: {exec_sig.reason}")
+            return "HOLD", 0.0, [tech_sig, sent_sig, risk_sig, exec_sig]
+
+        # Weighted confidence
+        w = config.AGENT_WEIGHTS
+        confidence = (
+            w["technical"] * tech_sig.confidence +
+            w["sentiment"]  * sent_sig.confidence +
+            w["risk"]       * risk_sig.confidence +
+            w["execution"]  * exec_sig.confidence
+        )
+
+        logger.info(
+            f"[CONSENSUS] {direction} agreed — confidence={confidence:.2f} | "
+            f"tech={tech_sig.confidence:.2f} sent={sent_sig.confidence:.2f} "
+            f"risk={risk_sig.confidence:.2f} exec={exec_sig.confidence:.2f}"
+        )
+        return direction, round(confidence, 3), [tech_sig, sent_sig, risk_sig, exec_sig]
+</file>
+
+<file path="backtest.py">
+"""
+backtest.py — Walk-forward backtesting module.
+
+Walk-forward approach:
+  1. Slide a training window across historical data
+  2. Optimize signal thresholds on the in-sample window
+  3. Evaluate on the out-of-sample window (never seen by optimizer)
+  4. Aggregate results across all folds
+
+This avoids the lookahead/overfitting problem of a single-period backtest.
+"""
+
+from __future__ import annotations
+
+import logging
+import sqlite3
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Generator
+
+import ccxt
+import pandas as pd
+import numpy as np
+
+import config
+from agents import TechnicalAgent
+from strategy import RegimeDetector, TradingStrategy
+from ml_filter import extract_features
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class Trade:
+    entry_time:  datetime
+    exit_time:   datetime
+    signal:      str
+    entry_price: float
+    exit_price:  float
+    size_usdt:   float
+    pnl_usdt:    float
+    pnl_pct:     float
+    regime:      str
+    stop_loss:   float
+    take_profit: float
+    features:    dict = field(default_factory=dict)   # ML training context
+
+
+@dataclass
+class BacktestResult:
+    total_return_pct:  float
+    sharpe_ratio:      float
+    max_drawdown_pct:  float
+    win_rate_pct:      float
+    total_trades:      int
+    winning_trades:    int
+    losing_trades:     int
+    avg_win_usdt:      float
+    avg_loss_usdt:     float
+    profit_factor:     float
+    fee_adjusted_pnl:  float
+    trades:            list[Trade] = field(default_factory=list)
+    equity_curve:      list[float] = field(default_factory=list)
+    fold_results:      list[dict]  = field(default_factory=list)
+
+
+class WalkForwardBacktester:
+    """
+    Runs walk-forward backtesting on historical OHLCV data.
+    Uses the same TechnicalAgent and RegimeDetector as live trading.
+    """
+
+    BINANCE_FEE = 0.001  # 0.1% taker
+
+    def __init__(
+        self,
+        in_sample_bars:  int = 1000,
+        out_sample_bars: int = 200,
+        step_bars:       int = 200,
+        starting_capital: float = None,
+    ):
+        self.in_sample  = in_sample_bars
+        self.out_sample = out_sample_bars
+        self.step       = step_bars
+        self.capital    = starting_capital or config.STARTING_CAPITAL
+
+        self.technical  = TechnicalAgent()
+        self.regime_det = RegimeDetector()
+        self.strategy   = TradingStrategy()
+
+    # ─── Public API ──────────────────────────────────────────────────────────
+
+    def run(self, df: pd.DataFrame) -> BacktestResult:
+        """Run walk-forward test on a DataFrame of OHLCV data."""
+        logger.info(
+            f"Walk-forward backtest: {len(df)} bars, "
+            f"IS={self.in_sample} OS={self.out_sample} step={self.step}"
+        )
+
+        all_trades:  list[Trade] = []
+        fold_results: list[dict] = []
+
+        for fold_idx, (train_df, test_df) in enumerate(self._folds(df)):
+            fold_trades = self._simulate_fold(train_df, test_df)
+            fold_stats  = self._fold_stats(fold_trades)
+            fold_stats["fold"] = fold_idx + 1
+            fold_results.append(fold_stats)
+            all_trades.extend(fold_trades)
+
+            logger.info(
+                f"Fold {fold_idx+1}: trades={len(fold_trades)} "
+                f"win_rate={fold_stats['win_rate_pct']:.1f}% "
+                f"return={fold_stats['total_return_pct']:.2f}%"
+            )
+
+        return self._aggregate(all_trades, fold_results)
+
+    def fetch_historical(
+        self,
+        symbol: str = None,
+        timeframe: str = None,
+        days: int = 400,
+    ) -> pd.DataFrame:
+        """
+        Fetch historical OHLCV from Binance (public endpoint, no API key needed).
+        """
+        symbol    = symbol    or config.TRADING_PAIR
+        timeframe = timeframe or config.TIMEFRAME
+
+        exchange = ccxt.binance({"enableRateLimit": True})
+        since    = exchange.parse8601(
+            (pd.Timestamp.utcnow() - pd.Timedelta(days=days)).isoformat()
+        )
+
+        logger.info(f"Fetching {days} days of {symbol} {timeframe} from Binance…")
+        all_ohlcv = []
+        while True:
+            ohlcv = exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=1000)
+            if not ohlcv:
+                break
+            all_ohlcv.extend(ohlcv)
+            since = ohlcv[-1][0] + 1
+            if len(ohlcv) < 1000:
+                break
+
+        df = pd.DataFrame(all_ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+        df = df.set_index("timestamp").drop_duplicates()
+        logger.info(f"Fetched {len(df)} candles ({df.index[0]} → {df.index[-1]})")
+        return df
+
+    # ─── Internal ─────────────────────────────────────────────────────────────
+
+    def _folds(self, df: pd.DataFrame) -> Generator:
+        start = self.in_sample
+        while start + self.out_sample <= len(df):
+            train_df = df.iloc[start - self.in_sample : start]
+            test_df  = df.iloc[start : start + self.out_sample]
+            yield train_df, test_df
+            start += self.step
+
+    def _simulate_fold(self, train_df: pd.DataFrame, test_df: pd.DataFrame) -> list[Trade]:
+        """
+        Simulate bar-by-bar trading on the out-of-sample (test) window.
+        Uses the tail of train_df as indicator lookback context so the
+        first test bar has a full warm-up history.
+        """
+        trades:  list[Trade] = []
+        balance = self.capital
+        in_trade = False
+        entry_price = stop_loss = take_profit = 0.0
+        entry_time    = None
+        entry_signal  = ""
+        entry_regime  = ""
+        entry_features: dict = {}
+        size_usdt     = 0.0
+
+        lookback = 200  # bars of context needed for indicators (EMA200, ADX, etc.)
+
+        # Prepend tail of training data so test bar 0 has a full lookback window
+        context = pd.concat([train_df.iloc[-lookback:], test_df])
+        n_test  = len(test_df)
+
+        # Iterate only over the out-of-sample bars (the last n_test rows)
+        for i in range(lookback, lookback + n_test):
+            window = context.iloc[i - lookback : i + 1]
+            row    = context.iloc[i]
+            close  = row["close"]
+
+            if in_trade:
+                # Check exit conditions
+                if entry_signal == "BUY":
+                    hit_stop   = row["low"]   <= stop_loss
+                    hit_target = row["high"]  >= take_profit
+                elif entry_signal == "SELL":
+                    hit_stop   = row["high"]  >= stop_loss
+                    hit_target = row["low"]   <= take_profit
+                else:
+                    hit_stop = hit_target = False
+
+                if hit_stop or hit_target:
+                    exit_price = take_profit if hit_target else stop_loss
+                    sign       = 1 if entry_signal == "BUY" else -1
+                    gross_pnl  = sign * (exit_price - entry_price) / entry_price * size_usdt
+                    fee        = size_usdt * self.BINANCE_FEE * 2  # entry + exit
+                    net_pnl    = gross_pnl - fee
+                    pnl_pct    = net_pnl / size_usdt * 100
+
+                    trades.append(Trade(
+                        entry_time=entry_time,
+                        exit_time=context.index[i],
+                        signal=entry_signal,
+                        entry_price=entry_price,
+                        exit_price=exit_price,
+                        size_usdt=size_usdt,
+                        pnl_usdt=net_pnl,
+                        pnl_pct=pnl_pct,
+                        regime=entry_regime,
+                        stop_loss=stop_loss,
+                        take_profit=take_profit,
+                        features=entry_features,
+                    ))
+                    balance  += net_pnl
+                    in_trade  = False
+
+            else:
+                # Look for entry signal
+                regime_info = self.regime_det.detect(window)
+                regime      = regime_info["regime"]
+                tech_signal = self.technical.analyse(window, regime)
+
+                if tech_signal.signal in ("BUY", "SELL") and tech_signal.confidence >= 0.4:
+                    levels = self.strategy.compute_levels(window, tech_signal.signal, regime)
+                    if not levels:
+                        continue
+
+                    order_usdt = max(config.MIN_ORDER_USDT, balance * config.MAX_RISK_PER_TRADE)
+                    order_usdt = min(order_usdt, balance * 0.95)
+                    if order_usdt < config.MIN_ORDER_USDT or order_usdt > balance:
+                        continue
+
+                    in_trade      = True
+                    entry_price   = close
+                    stop_loss     = levels["stop_loss"]
+                    take_profit   = levels["take_profit"]
+                    entry_time    = context.index[i]
+                    entry_signal  = tech_signal.signal
+                    entry_regime  = regime
+                    size_usdt     = order_usdt
+                    entry_features = extract_features(window, tech_signal.signal)
+
+        # Close any open trade at the last bar's closing price (market-exit at fold end)
+        if in_trade:
+            last_row   = context.iloc[-1]
+            exit_price = last_row["close"]
+            sign       = 1 if entry_signal == "BUY" else -1
+            gross_pnl  = sign * (exit_price - entry_price) / entry_price * size_usdt
+            fee        = size_usdt * self.BINANCE_FEE * 2
+            net_pnl    = gross_pnl - fee
+            pnl_pct    = net_pnl / size_usdt * 100
+            trades.append(Trade(
+                entry_time=entry_time,
+                exit_time=context.index[-1],
+                signal=entry_signal,
+                entry_price=entry_price,
+                exit_price=exit_price,
+                size_usdt=size_usdt,
+                pnl_usdt=net_pnl,
+                pnl_pct=pnl_pct,
+                regime=entry_regime,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                features=entry_features,
+            ))
+
+        return trades
+
+    def _fold_stats(self, trades: list[Trade]) -> dict:
+        if not trades:
+            return {
+                "total_return_pct": 0, "win_rate_pct": 0,
+                "sharpe_ratio": 0, "max_drawdown_pct": 0,
+                "total_trades": 0, "fee_adjusted_pnl": 0,
+            }
+
+        pnls         = [t.pnl_usdt for t in trades]
+        wins         = [p for p in pnls if p > 0]
+        losses       = [p for p in pnls if p < 0]
+        total_return = sum(pnls) / self.capital * 100
+        win_rate     = len(wins) / len(trades) * 100
+
+        equity   = np.cumsum(pnls)
+        peak     = np.maximum.accumulate(equity)
+        drawdown = (peak - equity) / (peak + self.capital)
+        max_dd   = float(drawdown.max()) * 100
+
+        daily_returns = pd.Series(pnls)
+        sharpe = (daily_returns.mean() / daily_returns.std() * np.sqrt(252)
+                  if daily_returns.std() > 0 else 0)
+
+        return {
+            "total_return_pct":  round(total_return, 2),
+            "win_rate_pct":      round(win_rate, 1),
+            "sharpe_ratio":      round(float(sharpe), 2),
+            "max_drawdown_pct":  round(max_dd, 2),
+            "total_trades":      len(trades),
+            "fee_adjusted_pnl":  round(sum(pnls), 2),
+        }
+
+    def _aggregate(self, trades: list[Trade], fold_results: list[dict]) -> BacktestResult:
+        if not trades:
+            logger.warning("Backtest produced zero trades")
+            return BacktestResult(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+        pnls    = [t.pnl_usdt for t in trades]
+        wins    = [p for p in pnls if p > 0]
+        losses  = [p for p in pnls if p < 0]
+
+        equity  = self.capital + np.cumsum(pnls)
+        peak    = np.maximum.accumulate(equity)
+        dd_pct  = ((peak - equity) / peak * 100).max()
+
+        daily   = pd.Series(pnls)
+        sharpe  = (daily.mean() / daily.std() * np.sqrt(252)
+                   if daily.std() > 0 else 0)
+
+        profit_factor = (sum(wins) / abs(sum(losses))
+                         if losses else float("inf"))
+
+        result = BacktestResult(
+            total_return_pct = round(sum(pnls) / self.capital * 100, 2),
+            sharpe_ratio     = round(float(sharpe), 2),
+            max_drawdown_pct = round(float(dd_pct), 2),
+            win_rate_pct     = round(len(wins) / len(trades) * 100, 1),
+            total_trades     = len(trades),
+            winning_trades   = len(wins),
+            losing_trades    = len(losses),
+            avg_win_usdt     = round(sum(wins)   / len(wins)   if wins   else 0, 2),
+            avg_loss_usdt    = round(sum(losses)  / len(losses) if losses else 0, 2),
+            profit_factor    = round(profit_factor, 2),
+            fee_adjusted_pnl = round(sum(pnls), 2),
+            trades           = trades,
+            equity_curve     = equity.tolist(),
+            fold_results     = fold_results,
+        )
+
+        self._print_report(result)
+        return result
+
+    def _print_report(self, r: BacktestResult):
+        sep = "─" * 50
+        print(f"\n{sep}")
+        print("  WALK-FORWARD BACKTEST REPORT")
+        print(sep)
+        print(f"  Total Return:     {r.total_return_pct:+.2f}%")
+        print(f"  Sharpe Ratio:     {r.sharpe_ratio:.2f}")
+        print(f"  Max Drawdown:     {r.max_drawdown_pct:.2f}%")
+        print(f"  Win Rate:         {r.win_rate_pct:.1f}%")
+        print(f"  Total Trades:     {r.total_trades}")
+        print(f"  Profit Factor:    {r.profit_factor:.2f}")
+        print(f"  Fee-Adj PnL:      ${r.fee_adjusted_pnl:+.2f}")
+        print(f"  Avg Win / Loss:   ${r.avg_win_usdt:.2f} / ${r.avg_loss_usdt:.2f}")
+        print(f"\n  Walk-Forward Folds ({len(r.fold_results)}):")
+        for fold in r.fold_results:
+            print(
+                f"    Fold {fold['fold']:02d}: "
+                f"return={fold['total_return_pct']:+.2f}% "
+                f"win={fold['win_rate_pct']:.0f}% "
+                f"trades={fold['total_trades']}"
+            )
+        print(sep + "\n")
+
+    def save_results(self, result: BacktestResult, output_dir: str = "backtest_results"):
+        """Save equity curve and trade log to CSV."""
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        if result.trades:
+            trades_df = pd.DataFrame([
+                {
+                    "entry_time":   t.entry_time,
+                    "exit_time":    t.exit_time,
+                    "signal":       t.signal,
+                    "entry_price":  t.entry_price,
+                    "exit_price":   t.exit_price,
+                    "size_usdt":    t.size_usdt,
+                    "pnl_usdt":     t.pnl_usdt,
+                    "pnl_pct":      t.pnl_pct,
+                    "regime":       t.regime,
+                }
+                for t in result.trades
+            ])
+            trades_df.to_csv(f"{output_dir}/{ts}_trades.csv", index=False)
+
+        equity_df = pd.DataFrame({"equity": result.equity_curve})
+        equity_df.to_csv(f"{output_dir}/{ts}_equity.csv", index=False)
+        logger.info(f"Results saved to {output_dir}/{ts}_*.csv")
+
+    def extract_training_data(
+        self, result: "BacktestResult"
+    ) -> tuple[list[dict], list[int]]:
+        """
+        Extract (features_list, outcomes) from a completed BacktestResult for ML training.
+        Only includes trades that have captured features (signal BUY/SELL, not fold-end exits).
+        outcomes: 1 = profitable trade, 0 = losing trade
+        """
+        features_list = []
+        outcomes      = []
+        for t in result.trades:
+            if not t.features:
+                continue
+            features_list.append(t.features)
+            outcomes.append(1 if t.pnl_usdt > 0 else 0)
+        logger.info(
+            f"Extracted {len(features_list)} labelled trades for ML training "
+            f"(win_rate={sum(outcomes)/len(outcomes):.1%} if outcomes else 'n/a')"
+        )
+        return features_list, outcomes
+</file>
+
+<file path="bot.py">
+"""
+bot.py — Main live/paper trading loop.
+
+Usage:
+    python bot.py              # paper trading (default from .env)
+    python bot.py --live       # override to live
+    python bot.py --backtest   # run walk-forward backtest and exit
+    python bot.py --toggle-kill-switch  # flip kill switch and exit
+
+MacBook resilience:
+- Exponential backoff reconnect on network errors
+- Graceful handling of lid-close (SIGTERM / KeyboardInterrupt)
+- Rate-limited polling to avoid CPU/thermal spikes
+"""
+
+from __future__ import annotations
+
+import argparse
+import gzip
+import json
+import logging
+import os
+import shutil
+import signal
+import smtplib
+import sqlite3
+import sys
+import time
+from datetime import datetime, timezone, timedelta
+from email.mime.application import MIMEApplication
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from pathlib import Path
+
+import ccxt
+import pandas as pd
+import requests
+
+import config
+from agents import ConsensusEngine
+from risk import RiskEngine
+from strategy import RegimeDetector, TradingStrategy
+
+# ─── Logging setup ────────────────────────────────────────────────────────────
+
+Path(config.LOG_DIR).mkdir(parents=True, exist_ok=True)
+Path("data").mkdir(parents=True, exist_ok=True)
+Path("ops").mkdir(parents=True, exist_ok=True)
+Path("backtest_results").mkdir(parents=True, exist_ok=True)
+
+logging.basicConfig(
+    level=getattr(logging, config.LOG_LEVEL, logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(
+            f"{config.LOG_DIR}/bot_{datetime.now().strftime('%Y%m%d')}.log",
+            encoding="utf-8",
+        ),
+    ],
+)
+logger = logging.getLogger("bot")
+
+
+# ─── Database ─────────────────────────────────────────────────────────────────
+
+def init_db(db_path: str = config.DB_PATH):
+    conn = sqlite3.connect(db_path)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS trades (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp    TEXT NOT NULL,
+            signal       TEXT NOT NULL,
+            regime       TEXT,
+            entry_price  REAL,
+            exit_price   REAL,
+            size_usdt    REAL,
+            pnl_usdt     REAL,
+            pnl_pct      REAL,
+            stop_loss    REAL,
+            take_profit  REAL,
+            confidence   REAL,
+            mode         TEXT,
+            notes        TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS decisions (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp    TEXT NOT NULL,
+            signal       TEXT,
+            confidence   REAL,
+            regime       TEXT,
+            adx          REAL,
+            agent_details TEXT,
+            action_taken TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+    logger.info(f"Database ready: {db_path}")
+
+
+def log_decision(conn, signal, confidence, regime_info, agent_signals, action):
+    agent_json = json.dumps([
+        {"agent": a.agent, "signal": a.signal, "confidence": a.confidence, "reason": a.reason}
+        for a in agent_signals
+    ])
+    conn.execute(
+        "INSERT INTO decisions (timestamp, signal, confidence, regime, adx, agent_details, action_taken) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            datetime.now(timezone.utc).isoformat(),
+            signal, confidence,
+            regime_info.get("regime", ""),
+            regime_info.get("adx", 0),
+            agent_json,
+            action,
+        ),
+    )
+    conn.commit()
+
+
+def log_trade(conn, trade_data: dict):
+    conn.execute(
+        "INSERT INTO trades (timestamp, signal, regime, entry_price, exit_price, "
+        "size_usdt, pnl_usdt, pnl_pct, stop_loss, take_profit, confidence, mode, notes) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            datetime.now(timezone.utc).isoformat(),
+            trade_data.get("signal", ""),
+            trade_data.get("regime", ""),
+            trade_data.get("entry_price", 0),
+            trade_data.get("exit_price", 0),
+            trade_data.get("size_usdt", 0),
+            trade_data.get("pnl_usdt", 0),
+            trade_data.get("pnl_pct", 0),
+            trade_data.get("stop_loss", 0),
+            trade_data.get("take_profit", 0),
+            trade_data.get("confidence", 0),
+            config.TRADING_MODE,
+            trade_data.get("notes", ""),
+        ),
+    )
+    conn.commit()
+
+
+# ─── Telegram notifications ───────────────────────────────────────────────────
+
+def send_telegram(message: str):
+    if not config.TELEGRAM_ENABLED:
+        return
+    if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
+        return
+    try:
+        url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
+        requests.post(url, json={"chat_id": config.TELEGRAM_CHAT_ID, "text": message},
+                      timeout=5)
+    except Exception as e:
+        logger.debug(f"Telegram send failed: {e}")
+
+
+def send_telegram_file(file_path: str, caption: str = ""):
+    """Send a file (e.g. compressed log) to Telegram chat as a document."""
+    if not config.TELEGRAM_ENABLED or not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
+        return False
+    try:
+        url = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendDocument"
+        with open(file_path, "rb") as f:
+            resp = requests.post(
+                url,
+                data={"chat_id": config.TELEGRAM_CHAT_ID, "caption": caption},
+                files={"document": (Path(file_path).name, f)},
+                timeout=60,
+            )
+        return resp.ok
+    except Exception as e:
+        logger.warning(f"Telegram file send failed: {e}")
+        return False
+
+
+# ─── Log management ───────────────────────────────────────────────────────────
+
+def compress_old_logs(log_dir: str = config.LOG_DIR) -> list[str]:
+    """
+    Gzip any plain .log files older than LOG_COMPRESS_AFTER_HOURS.
+    Returns list of newly compressed file paths.
+    """
+    compressed = []
+    cutoff = datetime.now() - timedelta(hours=config.LOG_COMPRESS_AFTER_HOURS)
+    for log_file in Path(log_dir).glob("*.log"):
+        mtime = datetime.fromtimestamp(log_file.stat().st_mtime)
+        if mtime < cutoff:
+            gz_path = log_file.with_suffix(".log.gz")
+            with open(log_file, "rb") as f_in:
+                with gzip.open(gz_path, "wb") as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+            log_file.unlink()
+            compressed.append(str(gz_path))
+            logger.info(f"Compressed old log: {gz_path}")
+    return compressed
+
+
+def send_logs_email(subject: str = None, body: str = None) -> bool:
+    """
+    Email all compressed log files to EMAIL_RECIPIENT using Gmail SMTP.
+    Requires EMAIL_ADDRESS and EMAIL_APP_PASSWORD in .env.
+    Get a Gmail app password at: https://myaccount.google.com/apppasswords
+    """
+    if not config.EMAIL_ADDRESS or not config.EMAIL_APP_PASSWORD:
+        logger.warning("EMAIL_ADDRESS or EMAIL_APP_PASSWORD not set — skipping email")
+        return False
+
+    log_files = (
+        list(Path(config.LOG_DIR).glob("*.log.gz")) +
+        list(Path(config.LOG_DIR).glob("*.log"))
+    )
+    if not log_files:
+        logger.info("No log files to send")
+        return False
+
+    subject = subject or f"CryptoBot logs — {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    body    = body    or (
+        f"Bot log bundle from AWS.\n"
+        f"Files: {[f.name for f in log_files]}\n"
+        f"Generated: {datetime.now(timezone.utc).isoformat()}"
+    )
+
+    msg = MIMEMultipart()
+    msg["From"]    = config.EMAIL_ADDRESS
+    msg["To"]      = config.EMAIL_RECIPIENT
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain"))
+
+    for log_file in log_files:
+        with open(log_file, "rb") as f:
+            part = MIMEApplication(f.read(), Name=log_file.name)
+        part["Content-Disposition"] = f'attachment; filename="{log_file.name}"'
+        msg.attach(part)
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(config.EMAIL_ADDRESS, config.EMAIL_APP_PASSWORD)
+            smtp.send_message(msg)
+        logger.info(f"Logs emailed to {config.EMAIL_RECIPIENT} ({len(log_files)} files)")
+        return True
+    except Exception as e:
+        logger.error(f"Email send failed: {e}")
+        return False
+
+
+def send_logs(via: str = "telegram") -> bool:
+    """
+    Compress old logs then send them.
+    via: "telegram" | "email" | "both"
+    """
+    compress_old_logs()
+    log_files = (
+        list(Path(config.LOG_DIR).glob("*.log.gz")) +
+        list(Path(config.LOG_DIR).glob("*.log"))
+    )
+    if not log_files:
+        logger.info("No log files to send")
+        return False
+
+    success = False
+    if via in ("telegram", "both"):
+        for lf in log_files:
+            ok = send_telegram_file(str(lf), caption=f"Bot log: {lf.name}")
+            if ok:
+                logger.info(f"Sent via Telegram: {lf.name}")
+                success = True
+
+    if via in ("email", "both"):
+        success = send_logs_email() or success
+
+    return success
+
+
+# ─── Exchange connection with resilience ──────────────────────────────────────
+
+def build_exchange(live: bool = False):
+    if config.EXCHANGE == "kucoin":
+        params = {
+            "apiKey":          config.KUCOIN_API_KEY,
+            "secret":          config.KUCOIN_API_SECRET,
+            "password":        config.KUCOIN_PASSPHRASE,
+            "enableRateLimit": True,
+            "options":         {"defaultType": "spot"},
+        }
+        logger.info("Exchange: KuCoin")
+        return ccxt.kucoin(params)
+
+    # Default: Binance
+    params = {
+        "apiKey":          config.BINANCE_API_KEY,
+        "secret":          config.BINANCE_API_SECRET,
+        "enableRateLimit": True,
+        "options":         {"defaultType": "spot"},
+    }
+    if config.BINANCE_TESTNET:
+        params["options"]["urls"] = {
+            "api": {
+                "public":  "https://testnet.binance.vision/api",
+                "private": "https://testnet.binance.vision/api",
+            }
+        }
+    logger.info("Exchange: Binance")
+    return ccxt.binance(params)
+
+
+def fetch_ohlcv_with_retry(exchange, symbol, timeframe, limit=300) -> pd.DataFrame | None:
+    """Fetch OHLCV with exponential backoff on network errors."""
+    attempt  = 0
+    backoff  = 1.0
+    max_att  = config.MAX_RECONNECT_ATTEMPTS
+
+    while attempt < max_att:
+        try:
+            ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+            df    = pd.DataFrame(
+                ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"]
+            )
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+            df = df.set_index("timestamp")
+            return df
+
+        except (ccxt.NetworkError, ccxt.RequestTimeout, ccxt.ExchangeNotAvailable) as e:
+            attempt += 1
+            wait     = min(backoff * (config.RECONNECT_BACKOFF_BASE ** attempt),
+                           config.RECONNECT_BACKOFF_MAX)
+            logger.warning(f"Network error (attempt {attempt}/{max_att}): {e} — retry in {wait:.0f}s")
+            time.sleep(wait)
+
+        except ccxt.AuthenticationError as e:
+            logger.error(f"Auth error — check API keys: {e}")
+            return None
+
+        except Exception as e:
+            logger.error(f"Unexpected fetch error: {e}")
+            attempt += 1
+            time.sleep(min(backoff * attempt, 30))
+
+    logger.error(f"Failed to fetch OHLCV after {max_att} attempts")
+    return None
+
+
+def fetch_balance_with_retry(exchange) -> float | None:
+    """Fetch USDT balance with retry."""
+    try:
+        balance = exchange.fetch_balance()
+        return balance["free"].get(config.BASE_CURRENCY, 0)
+    except Exception as e:
+        logger.warning(f"Balance fetch error: {e}")
+        return None
+
+
+# ─── Paper trading execution ──────────────────────────────────────────────────
+
+class PaperTradingEngine:
+    """Simulates order execution with realistic fees and slippage."""
+
+    FEE      = 0.001   # 0.1% taker
+    SLIPPAGE = 0.0005  # 0.05%
+
+    def __init__(self, balance: float):
+        self.balance   = balance
+        self.in_trade  = False
+        self.position: dict = {}
+
+    def enter(self, signal: str, price: float, size_usdt: float, levels: dict) -> dict:
+        if self.in_trade:
+            return {}
+
+        # Apply entry slippage
+        slip_factor  = (1 + self.SLIPPAGE) if signal == "BUY" else (1 - self.SLIPPAGE)
+        actual_price = price * slip_factor
+        fee_cost     = size_usdt * self.FEE
+
+        self.in_trade = True
+        self.position = {
+            "signal":      signal,
+            "entry_price": actual_price,
+            "size_usdt":   size_usdt,
+            "fee_paid":    fee_cost,
+            "stop_loss":   levels["stop_loss"],
+            "take_profit": levels["take_profit"],
+            "entered_at":  datetime.now(timezone.utc),
+        }
+        self.balance -= fee_cost
+        logger.info(
+            f"[PAPER] ENTER {signal}: price={actual_price:.2f}, size=${size_usdt:.2f}, "
+            f"SL={levels['stop_loss']:.2f}, TP={levels['take_profit']:.2f}"
+        )
+        return self.position
+
+    def check_exit(self, high: float, low: float) -> dict | None:
+        """Check if current candle hits SL or TP. Returns trade result or None."""
+        if not self.in_trade:
+            return None
+
+        pos    = self.position
+        signal = pos["signal"]
+        ep     = pos["entry_price"]
+
+        hit_tp = hit_sl = False
+        exit_price = 0.0
+
+        if signal == "BUY":
+            if low <= pos["stop_loss"]:
+                hit_sl     = True
+                exit_price = pos["stop_loss"]
+            elif high >= pos["take_profit"]:
+                hit_tp     = True
+                exit_price = pos["take_profit"]
+        elif signal == "SELL":
+            if high >= pos["stop_loss"]:
+                hit_sl     = True
+                exit_price = pos["stop_loss"]
+            elif low <= pos["take_profit"]:
+                hit_tp     = True
+                exit_price = pos["take_profit"]
+
+        if not (hit_tp or hit_sl):
+            return None
+
+        # Apply exit slippage
+        slip_factor  = (1 - self.SLIPPAGE) if signal == "BUY" else (1 + self.SLIPPAGE)
+        actual_exit  = exit_price * slip_factor
+        exit_fee     = pos["size_usdt"] * self.FEE
+        sign         = 1 if signal == "BUY" else -1
+        gross_pnl    = sign * (actual_exit - ep) / ep * pos["size_usdt"]
+        net_pnl      = gross_pnl - exit_fee - pos["fee_paid"]
+        pnl_pct      = net_pnl / pos["size_usdt"] * 100
+
+        self.balance += net_pnl + pos["size_usdt"]
+        self.in_trade = False
+
+        result = {
+            **pos,
+            "exit_price": actual_exit,
+            "exit_time":  datetime.now(timezone.utc),
+            "pnl_usdt":   round(net_pnl, 4),
+            "pnl_pct":    round(pnl_pct, 3),
+            "exit_reason": "TP" if hit_tp else "SL",
+        }
+        logger.info(
+            f"[PAPER] EXIT {signal}: entry={ep:.2f} exit={actual_exit:.2f} "
+            f"PnL=${net_pnl:+.4f} ({pnl_pct:+.2f}%) [{result['exit_reason']}]"
+        )
+        return result
+
+
+# ─── Main bot loop ────────────────────────────────────────────────────────────
+
+class TradingBot:
+
+    def __init__(self, live_override: bool = False):
+        self.live       = live_override or (config.TRADING_MODE == "live")
+        self.exchange   = build_exchange(self.live)
+        self.risk       = RiskEngine()
+        self.consensus  = ConsensusEngine()
+        self.regime_det = RegimeDetector()
+        self.strategy   = TradingStrategy()
+        self.paper_eng: PaperTradingEngine | None = None
+        self._running   = True
+
+        init_db()
+        self.db = sqlite3.connect(config.DB_PATH, check_same_thread=False)
+
+        if not self.live:
+            self.paper_eng = PaperTradingEngine(config.STARTING_CAPITAL)
+
+        mode_str = "LIVE" if self.live else "PAPER"
+        logger.info(f"Bot initialised — mode={mode_str} pair={config.TRADING_PAIR}")
+        send_telegram(
+            f"Bot started [{mode_str}]\n"
+            f"Pair: {config.TRADING_PAIR}\n"
+            f"Capital: ${self.risk.current_balance:.2f}\n"
+            f"Kill switch: {self.risk.kill_switch}"
+        )
+
+        # Graceful shutdown on SIGTERM (macOS lid-close / system events)
+        signal.signal(signal.SIGTERM, self._handle_shutdown)
+        signal.signal(signal.SIGINT,  self._handle_shutdown)
+
+    def _handle_shutdown(self, signum, frame):
+        logger.info(f"Shutdown signal received ({signum})")
+        self._running = False
+
+    def run(self):
+        logger.info("Starting main loop — press Ctrl+C to stop")
+        consecutive_errors = 0
+        last_log_compress  = datetime.now()
+
+        while self._running:
+            loop_start = time.monotonic()
+            try:
+                self._tick()
+                consecutive_errors = 0
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                consecutive_errors += 1
+                logger.error(f"Loop error #{consecutive_errors}: {e}", exc_info=True)
+                if consecutive_errors >= 5:
+                    send_telegram(f"Bot error streak ({consecutive_errors}): {e}")
+                if consecutive_errors >= config.MAX_RECONNECT_ATTEMPTS:
+                    logger.critical("Too many consecutive errors — halting")
+                    break
+
+            # Daily: compress old logs to save AWS disk space
+            if (datetime.now() - last_log_compress).total_seconds() > 86400:
+                compress_old_logs()
+                last_log_compress = datetime.now()
+
+            # Rate-limited sleep: maintain ~60s cycle without busy-waiting
+            elapsed = time.monotonic() - loop_start
+            sleep   = max(0, config.DATA_UPDATE_INTERVAL - elapsed)
+            if sleep > 0:
+                time.sleep(sleep)
+
+        logger.info("Bot stopped")
+        send_telegram("Bot stopped")
+        self.db.close()
+
+    def _tick(self):
+        """Single iteration of the trading loop."""
+        symbol    = config.TRADING_PAIR
+        timeframe = config.TIMEFRAME
+
+        # 1. Fetch market data (1h primary + 4h for multi-timeframe confirmation)
+        df = fetch_ohlcv_with_retry(self.exchange, symbol, timeframe, limit=300)
+        if df is None or len(df) < config.MIN_CANDLES_REQUIRED:
+            logger.warning(f"Insufficient data ({len(df) if df is not None else 0} bars)")
+            return
+
+        # 4h data is optional — if fetch fails we continue without MTF filter
+        df_4h = fetch_ohlcv_with_retry(self.exchange, symbol, "4h", limit=100)
+
+        close = df["close"].iloc[-1]
+        high  = df["high"].iloc[-1]
+        low   = df["low"].iloc[-1]
+
+        # 2. Sync live balance
+        if self.live:
+            live_bal = fetch_balance_with_retry(self.exchange)
+            if live_bal is not None:
+                self.risk.update_balance(live_bal)
+        else:
+            if self.paper_eng:
+                self.risk.update_balance(self.paper_eng.balance)
+
+        balance = self.risk.current_balance
+
+        # 3. Check open paper trade for exit
+        if self.paper_eng and self.paper_eng.in_trade:
+            exit_result = self.paper_eng.check_exit(high, low)
+            if exit_result:
+                self.risk.record_trade(exit_result["pnl_usdt"])
+                log_trade(self.db, {**exit_result, "regime": exit_result.get("signal", "")})
+                send_telegram(
+                    f"Trade closed [{exit_result['exit_reason']}]\n"
+                    f"{exit_result['signal']} @ {exit_result['exit_price']:.2f}\n"
+                    f"PnL: ${exit_result['pnl_usdt']:+.4f} ({exit_result['pnl_pct']:+.2f}%)\n"
+                    f"{self.risk.summary()}"
+                )
+
+        # 4. Skip entry if already in trade
+        if (self.paper_eng and self.paper_eng.in_trade) or self.risk.kill_switch:
+            return
+
+        # 5. Detect regime
+        regime_info = self.regime_det.detect(df)
+        regime      = regime_info["regime"]
+
+        # 6. Run 4-agent consensus (+ MTF filter + ML filter)
+        risk_state  = self.risk.state()
+        signal, confidence, agent_sigs = self.consensus.decide(
+            df, regime, risk_state, balance, close, df_4h=df_4h
+        )
+
+        # 7. Log decision
+        log_decision(self.db, signal, confidence, regime_info, agent_sigs, "enter" if signal != "HOLD" else "hold")
+        logger.info(
+            f"[TICK] price={close:.2f} regime={regime} ADX={regime_info['adx']} "
+            f"signal={signal} conf={confidence:.2f} | {self.risk.summary()}"
+        )
+
+        # 8. Execute if consensus says go
+        if signal in ("BUY", "SELL"):
+            levels   = self.strategy.compute_levels(df, signal, regime)
+            size     = self.risk.position_size_usdt()
+
+            if not self.live and self.paper_eng:
+                self.paper_eng.enter(signal, close, size, levels)
+                send_telegram(
+                    f"Trade entered [PAPER]\n"
+                    f"{signal} @ {close:.2f}\n"
+                    f"SL={levels['stop_loss']:.2f} TP={levels['take_profit']:.2f}\n"
+                    f"Size=${size:.2f} | Conf={confidence:.2f}\n"
+                    f"Regime={regime} ADX={regime_info['adx']}"
+                )
+
+            elif self.live:
+                self._place_live_order(signal, close, size, levels)
+
+    def _place_live_order(self, signal: str, price: float, size_usdt: float, levels: dict):
+        """Place actual order on Binance. Only called when TRADING_MODE=live."""
+        try:
+            symbol    = config.TRADING_PAIR
+            qty_coin  = size_usdt / price
+            side      = "buy" if signal == "BUY" else "sell"
+
+            order = self.exchange.create_market_order(symbol, side, qty_coin)
+            logger.info(f"[LIVE] Order placed: {order}")
+            send_telegram(
+                f"LIVE ORDER PLACED\n"
+                f"{signal} {qty_coin:.6f} BTC @ ~{price:.2f}\n"
+                f"SL={levels['stop_loss']:.2f} TP={levels['take_profit']:.2f}\n"
+                f"Order ID: {order.get('id', 'N/A')}"
+            )
+        except Exception as e:
+            logger.error(f"Live order failed: {e}")
+            send_telegram(f"LIVE ORDER FAILED: {e}")
+
+
+# ─── CLI entry point ──────────────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(description="Crypto Survival System Trading Bot")
+    parser.add_argument("--live",               action="store_true", help="Override to live trading")
+    parser.add_argument("--backtest",           action="store_true", help="Run walk-forward backtest and exit")
+    parser.add_argument("--backtest-days",      type=int, default=400, help="Days of history for backtest")
+    parser.add_argument("--toggle-kill-switch", action="store_true", help="Toggle kill switch")
+    parser.add_argument("--send-logs",          action="store_true", help="Compress and send logs, then exit")
+    parser.add_argument("--send-logs-via",      default="telegram", choices=["telegram", "email", "both"],
+                        help="Delivery method for --send-logs (default: telegram)")
+    parser.add_argument("--train-filter",       action="store_true",
+                        help="Run backtest, train ML signal filter, save to ops/signal_filter.pkl")
+    parser.add_argument("--train-filter-days",  type=int, default=600,
+                        help="Days of history for ML filter training (default: 600)")
+    args = parser.parse_args()
+
+    if args.toggle_kill_switch:
+        risk = RiskEngine()
+        if risk.kill_switch:
+            risk.disengage_kill_switch()
+            print("Kill switch DISENGAGED")
+        else:
+            risk._engage_kill_switch("Manual activation via CLI")
+            print("Kill switch ENGAGED")
+        return
+
+    if args.send_logs:
+        ok = send_logs(via=args.send_logs_via)
+        print(f"Logs sent: {ok}")
+        return
+
+    if args.train_filter:
+        from backtest import WalkForwardBacktester
+        from ml_filter import SignalFilter
+        print(f"Training ML signal filter on {args.train_filter_days} days of data...")
+        bt  = WalkForwardBacktester()
+        df  = bt.fetch_historical(days=args.train_filter_days)
+        res = bt.run(df)
+        features_list, outcomes = bt.extract_training_data(res)
+        sf = SignalFilter()
+        ok = sf.train(features_list, outcomes)
+        if ok:
+            print(f"ML filter trained on {len(features_list)} trades — saved to ops/signal_filter.pkl")
+        else:
+            print("Training failed — see logs above for details")
+        return
+
+    if args.backtest:
+        from backtest import WalkForwardBacktester
+        bt  = WalkForwardBacktester()
+        df  = bt.fetch_historical(days=args.backtest_days)
+        res = bt.run(df)
+        bt.save_results(res)
+        return
+
+    bot = TradingBot(live_override=args.live)
+    bot.run()
+
+
+if __name__ == "__main__":
+    main()
+</file>
+
+<file path="config.py">
+"""
+config.py — Central configuration loaded from .env
+All secrets and tunable parameters live here. Never hardcode values.
+"""
+
+import os
+from dotenv import load_dotenv
+
+load_dotenv(override=True)  # .env always takes precedence over shell environment variables
+
+# ─── Exchange ────────────────────────────────────────────────────────────────
+EXCHANGE           = os.getenv("EXCHANGE", "binance")   # "binance" | "kucoin"
+BINANCE_API_KEY    = os.getenv("BINANCE_API_KEY", "")
+BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
+BINANCE_TESTNET    = os.getenv("BINANCE_TESTNET", "false").lower() == "true"
+KUCOIN_API_KEY     = os.getenv("KUCOIN_API_KEY", "")
+KUCOIN_API_SECRET  = os.getenv("KUCOIN_API_SECRET", "")
+KUCOIN_PASSPHRASE  = os.getenv("KUCOIN_PASSPHRASE", "")
+
+# ─── Trading ─────────────────────────────────────────────────────────────────
+TRADING_MODE      = os.getenv("TRADING_MODE", "paper")          # "paper" | "live"
+TRADING_PAIR      = os.getenv("TRADING_PAIR", "BTC/USDT")
+BASE_CURRENCY     = os.getenv("BASE_CURRENCY", "USDT")
+STARTING_CAPITAL  = float(os.getenv("STARTING_CAPITAL", "30"))
+
+# Binance minimum notional for BTC/USDT is ~$5 (min qty 0.00001 BTC).
+# We use $11 per trade to stay safely above minimums while capital is small.
+MIN_ORDER_USDT    = float(os.getenv("MIN_ORDER_USDT", "11"))
+
+# ─── Risk ─────────────────────────────────────────────────────────────────────
+MAX_RISK_PER_TRADE       = float(os.getenv("MAX_RISK_PER_TRADE", "0.005"))   # 0.5%
+MAX_DAILY_LOSS           = float(os.getenv("MAX_DAILY_LOSS", "0.01"))         # 1%
+MAX_CONSECUTIVE_LOSSES   = int(os.getenv("MAX_CONSECUTIVE_LOSSES", "2"))
+MAX_TRADES_PER_DAY       = int(os.getenv("MAX_TRADES_PER_DAY", "2"))
+MAX_DRAWDOWN_KILL_SWITCH = float(os.getenv("MAX_DRAWDOWN_KILL_SWITCH", "0.25"))  # 25% — suitable for accounts under $100; tighten to 0.10 above $200
+COOLDOWN_MINUTES         = int(os.getenv("COOLDOWN_MINUTES", "15"))
+
+# ATR multipliers for dynamic SL / TP
+ATR_STOP_MULT   = float(os.getenv("ATR_STOP_MULT", "1.5"))
+ATR_TARGET_MULT = float(os.getenv("ATR_TARGET_MULT", "2.5"))   # realistic TP on 1h BTC
+
+# Long-only mode: True for spot USDT accounts (cannot short BTC on spot)
+# Set to False only if using futures/margin.
+LONG_ONLY = os.getenv("LONG_ONLY", "true").lower() == "true"
+
+# Volume spike filter: current bar volume must exceed N × 20-bar average
+VOLUME_SPIKE_MIN = float(os.getenv("VOLUME_SPIKE_MIN", "1.2"))
+
+# ─── Strategy ────────────────────────────────────────────────────────────────
+DATA_UPDATE_INTERVAL  = int(os.getenv("DATA_UPDATE_INTERVAL", "60"))   # seconds
+MIN_CANDLES_REQUIRED  = int(os.getenv("MIN_CANDLES_REQUIRED", "100"))
+ADX_TREND_THRESHOLD   = float(os.getenv("ADX_TREND_THRESHOLD", "25"))  # ADX > 25 = trending
+RSI_TREND_BUY_MIN     = float(os.getenv("RSI_TREND_BUY_MIN",  "55"))   # RSI must clear 55, not just 50
+RSI_TREND_SELL_MAX    = float(os.getenv("RSI_TREND_SELL_MAX", "45"))
+RSI_RANGE_BUY_MAX     = float(os.getenv("RSI_RANGE_BUY_MAX",  "30"))   # genuine oversold
+RSI_RANGE_SELL_MIN    = float(os.getenv("RSI_RANGE_SELL_MIN", "70"))   # genuine overbought
+TIMEFRAME             = os.getenv("TIMEFRAME", "1h")
+
+# ─── Agent weights (must sum to 1.0) ─────────────────────────────────────────
+# Consensus: all agents must agree direction; weights used for confidence score
+AGENT_WEIGHTS = {
+    "technical": float(os.getenv("WEIGHT_TECHNICAL", "0.45")),
+    "sentiment":  float(os.getenv("WEIGHT_SENTIMENT",  "0.15")),
+    "risk":       float(os.getenv("WEIGHT_RISK",       "0.25")),
+    "execution":  float(os.getenv("WEIGHT_EXECUTION",  "0.15")),
+}
+
+# ─── Sentiment RSS feeds (free, no API key needed) ───────────────────────────
+SENTIMENT_FEEDS = [
+    "https://feeds.feedburner.com/CoinDesk",
+    "https://cointelegraph.com/rss",
+    "https://bitcoinmagazine.com/.rss/full/",
+    "https://cryptopotato.com/feed/",
+]
+SENTIMENT_CACHE_SECONDS = int(os.getenv("SENTIMENT_CACHE_SECONDS", "300"))  # 5 min
+
+# ─── Database & Logging ───────────────────────────────────────────────────────
+DB_PATH            = os.getenv("DB_PATH", "data/trading.db")
+LOG_LEVEL          = os.getenv("LOG_LEVEL", "INFO")
+LOG_RETENTION_DAYS = int(os.getenv("LOG_RETENTION_DAYS", "90"))
+LOG_DIR            = "logs"
+
+# ─── Telegram ────────────────────────────────────────────────────────────────
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_ENABLED   = os.getenv("TELEGRAM_ENABLED", "true").lower() == "true"
+
+# ─── Resilience ──────────────────────────────────────────────────────────────
+MAX_RECONNECT_ATTEMPTS = int(os.getenv("MAX_RECONNECT_ATTEMPTS", "10"))
+RECONNECT_BACKOFF_BASE = float(os.getenv("RECONNECT_BACKOFF_BASE", "2.0"))   # seconds
+RECONNECT_BACKOFF_MAX  = float(os.getenv("RECONNECT_BACKOFF_MAX", "120.0"))  # 2 min cap
+
+# ─── Kill switch file (manual override) ──────────────────────────────────────
+KILL_SWITCH_FILE = "ops/kill_switch.json"
+
+# ─── Log management ───────────────────────────────────────────────────────────
+# Optional email delivery for compressed logs (uses Gmail SMTP with app password)
+# Generate an app password at: https://myaccount.google.com/apppasswords
+EMAIL_ADDRESS      = os.getenv("EMAIL_ADDRESS", "")
+EMAIL_APP_PASSWORD = os.getenv("EMAIL_APP_PASSWORD", "")
+EMAIL_RECIPIENT    = os.getenv("EMAIL_RECIPIENT", EMAIL_ADDRESS)  # default: send to self
+# Compress logs older than this many hours (keeps disk usage low on AWS free tier)
+LOG_COMPRESS_AFTER_HOURS = int(os.getenv("LOG_COMPRESS_AFTER_HOURS", "24"))
+</file>
+
+<file path=".gitignore">
+# Environment — NEVER commit
+.env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Data & logs
+data/trading.db
+data/raw/
+data/processed/
+logs/
+backtest_results/
+ops/kill_switch.json
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+# SSH keys and certificates — NEVER commit
+*.pem
+*.key
+*.key.pub
+</file>
+
+<file path="requirements.txt">
+# Core exchange
+ccxt>=4.3.0
+
+# Data & analysis
+pandas>=2.0.0
+numpy>=1.26.0
+
+# Sentiment scraping (no paid APIs)
+feedparser>=6.0.0
+beautifulsoup4>=4.12.0
+requests>=2.31.0
+
+# Environment
+python-dotenv>=1.0.0
+
+# Notifications
+# (uses requests, already listed above)
+
+# Hyperparameter optimization (#1)
+optuna>=3.6.0
+
+# ML signal filter — training only; inference uses pure numpy (#3)
+scikit-learn>=1.4.0
+
+# Optional: faster JSON for logs
+ujson>=5.9.0
+</file>
+
+<file path="README.md">
+# Crypto Survival System
+
+A lean, intelligent BTC/USDT trading bot with a 4-agent consensus decision system, adaptive regime detection, and walk-forward backtesting. Built for a MacBook running on a small ($27–$500) account.
+
+---
+
+## Architecture
+
+```
+config.py     — All settings loaded from .env
+agents.py     — 4-agent consensus: Technical, Sentiment, Risk, Execution
+strategy.py   — ADX regime detection + ATR-based trade levels
+risk.py       — Position sizing, kill switch, daily loss tracking
+backtest.py   — Walk-forward backtester (no lookahead bias)
+bot.py        — Main loop (paper + live), DB logging, Telegram alerts
+```
+
+### How decisions are made
+
+A trade only executes when **all 4 agents agree**:
+
+| Agent | Role | Blocks on |
+|---|---|---|
+| **Technical** | RSI, MACD, Bollinger, EMA | No clear trend/reversal signal |
+| **Sentiment** | RSS news headlines (free) | Strongly opposing market mood |
+| **Risk** | Drawdown, daily loss, cooldown | Any risk limit breach |
+| **Execution** | Fees, slippage, min order | Balance too low, execution unfeasible |
+
+The regime (trending vs ranging) is detected via ADX:
+- **ADX > 25** → Trending → EMA crossover + RSI momentum
+- **ADX ≤ 25** → Ranging → Bollinger mean reversion
+
+---
+
+## Setup
+
+### 1. Clone and create virtual environment
+
+```bash
+cd "Crypto-Survival-System"
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 2. Configure `.env`
+
+Edit `.env` with your Binance API keys and Telegram bot token. Key settings:
+
+```
+TRADING_MODE=paper          # Start here — never start with live
+BINANCE_TESTNET=false       # Use real market data even in paper mode
+STARTING_CAPITAL=500        # Your paper balance in USDT
+TELEGRAM_ENABLED=true
+```
+
+### 3. Keep MacBook awake
+
+```bash
+# Terminal 1 — keep system awake (never sleeps while this runs)
+caffeinate -dimsu &
+
+# Or use Amphetamine (GUI) from the App Store
+```
+
+### 4. Run paper trading
+
+```bash
+python bot.py
+```
+
+### 5. Run walk-forward backtest (recommended before going live)
+
+```bash
+python bot.py --backtest --backtest-days 400
+```
+
+Results saved to `backtest_results/`.
+
+### 6. Switch to live trading
+
+Only after:
+- Paper trading is profitable over ≥ 2 weeks
+- Backtest shows Sharpe ≥ 1.0 and max drawdown < 15%
+
+```bash
+# In .env:
+TRADING_MODE=live
+
+# Or one-off override:
+python bot.py --live
+```
+
+---
+
+## Risk parameters (`.env`)
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `MAX_RISK_PER_TRADE` | `0.005` | 0.5% of balance per trade (ignored if balance < $100 — uses $11 minimum) |
+| `MAX_DAILY_LOSS` | `0.01` | 1% daily loss stops trading for the day |
+| `MAX_DRAWDOWN_KILL_SWITCH` | `0.10` | 10% total drawdown engages kill switch |
+| `MAX_CONSECUTIVE_LOSSES` | `2` | Triggers 15-minute cooldown |
+| `MAX_TRADES_PER_DAY` | `2` | Hard cap on daily trades |
+| `ATR_STOP_MULT` | `1.5` | Stop loss = entry ± 1.5×ATR |
+| `ATR_TARGET_MULT` | `3.0` | Take profit = entry ± 3.0×ATR (2:1 R:R) |
+
+---
+
+## Kill switch
+
+```bash
+# Toggle on/off
+python bot.py --toggle-kill-switch
+```
+
+The kill switch also auto-engages when drawdown exceeds `MAX_DRAWDOWN_KILL_SWITCH`. State is written to `ops/kill_switch.json`.
+
+---
+
+## MacBook resilience
+
+- **WiFi flicker**: exponential backoff reconnect (up to 10 attempts, capped at 120s wait)
+- **Lid close / SIGTERM**: graceful shutdown — writes final state, closes DB, sends Telegram alert
+- **Thermal management**: polling is rate-limited to exactly one tick per `DATA_UPDATE_INTERVAL` (default 60s). No busy loops.
+
+---
+
+## Expert critique (5 roles)
+
+### Strategy Expert
+The ADX regime switch is the most important feature — using the wrong strategy for the regime is the #1 cause of losses for rule-based systems. Weakness: ADX lags; a fast regime change (flash crash → recovery) may mis-classify for several bars. **Mitigation**: the 15-minute cooldown and 2-trade daily cap limit exposure during volatile transitions.
+
+### Risk Expert
+The 10% kill switch is conservative for a $27 account (that's $2.70 max loss). With Binance's $11 minimum order, you have very few trades before hitting that limit. Consider raising `MAX_DRAWDOWN_KILL_SWITCH` to `0.20` for micro accounts, or widening daily loss to `0.03`. The current settings are appropriate for accounts over $200.
+
+### Execution Expert
+The 0.1% taker fee on Binance is correct. With $11 orders, fee = $0.011 per side = $0.022 round-trip. The 2:1 risk-reward (3×ATR TP vs 1.5×ATR SL) means you need a ~33% win rate to break even after fees. Actual win rates on trend-following systems in BTC are typically 40–55% — this is viable.
+
+### Backtest Expert
+Walk-forward testing avoids the most common overfitting trap (training and testing on the same data). Key risk: the in-sample window (1000 bars) is used only for context, not parameter optimization — meaning there is no actual fitting happening, which is honest but means you're not extracting maximum edge from the data. If you add parameter optimization later, always use the out-of-sample fold for evaluation.
+
+### Security Expert
+- API keys are in `.env` — never commit this file (it's in `.gitignore`)
+- The bot requests **spot trading permissions only** — do not enable futures/margin on the API key
+- The GitHub token (`Crypto_Survival_System_Token`) should have the minimum scopes needed (repo read/write, no org admin)
+- Kill switch file is local — if the MacBook loses power mid-trade in live mode, the position stays open on Binance. Set a manual stop-loss order on Binance separately as a backstop.
+- Live order placement has no confirmation step — this is by design for automation, but double-check `.env` `TRADING_MODE` before running `--live`.
+</file>
+
+</files>

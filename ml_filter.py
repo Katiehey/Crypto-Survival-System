@@ -126,7 +126,9 @@ class SignalFilter:
     - When no model exists yet, predict() is a transparent passthrough.
     """
 
-    THRESHOLD = 0.55  # require >55% predicted win probability
+    THRESHOLD = 0.45  # block only if model is actively confident it's a loss (<45% win prob)
+                      # at 62 training samples CV accuracy is ~45% — effectively disabled
+                      # until 200+ trades accumulate
 
     def __init__(self):
         self._model: dict | None = None
