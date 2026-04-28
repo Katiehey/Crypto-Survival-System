@@ -22,9 +22,10 @@ optuna>=3.6.0
 # ML signal filter — training only; inference uses pure numpy (#3)
 scikit-learn>=1.4.0
 
-# Terminal dashboard
+# Terminal dashboard + web dashboard
 rich>=13.0.0
 psutil>=5.9.0
+flask>=3.0.0
 
 # Optional: faster JSON for logs
 ujson>=5.9.0

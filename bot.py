@@ -463,7 +463,9 @@ class TradingBot:
         self.regime_det = RegimeDetector()
         self.strategy   = TradingStrategy()
         self.paper_eng: PaperTradingEngine | None = None
-        self._running   = True
+        self._running          = True
+        self._last_heartbeat   = 0.0   # monotonic timestamp of last Telegram heartbeat
+        self._bot_start        = time.monotonic()
 
         init_db()
         self.db = sqlite3.connect(config.DB_PATH, check_same_thread=False)
@@ -508,6 +510,19 @@ class TradingBot:
                 if consecutive_errors >= config.MAX_RECONNECT_ATTEMPTS:
                     logger.critical("Too many consecutive errors — halting")
                     break
+
+            # Hourly Telegram heartbeat — confirms server is still alive
+            now_mono = time.monotonic()
+            if now_mono - self._last_heartbeat >= 3600:
+                uptime_h = int((now_mono - self._bot_start) / 3600)
+                uptime_m = int((now_mono - self._bot_start) % 3600 / 60)
+                send_telegram(
+                    f"💓 Bot heartbeat — still running\n"
+                    f"Uptime: {uptime_h}h {uptime_m}m\n"
+                    f"Balance: ${self.risk.current_balance:.2f}\n"
+                    f"Pair: {config.TRADING_PAIR} | Mode: {'LIVE' if self.live else 'PAPER'}"
+                )
+                self._last_heartbeat = now_mono
 
             # Daily: compress old logs to save AWS disk space
             if (datetime.now() - last_log_compress).total_seconds() > 86400:
