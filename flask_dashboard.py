@@ -529,8 +529,8 @@ function render(d) {
   $('total-trades').textContent  = d.total_trades;
   $('win-rate').textContent      = d.total_trades > 0 ? d.win_rate + '%' : '—';
   $('profit-factor').textContent = d.total_trades > 0 ? d.profit_factor : '—';
-  $('best-trade').textContent    = d.total_trades > 0 ? '+$' + d.best_trade  : '—';
-  $('worst-trade').textContent   = d.total_trades > 0 ? '$'  + d.worst_trade : '—';
+  $('best-trade').textContent    = d.total_trades > 0 ? (d.best_trade >= 0 ? '+$' : '-$') + Math.abs(d.best_trade).toFixed(4)  : '—';
+  $('worst-trade').textContent   = d.total_trades > 0 ? (d.worst_trade >= 0 ? '+$' : '-$') + Math.abs(d.worst_trade).toFixed(4) : '—';
 
   // Order book
   const tot = d.bid_depth_usdt + d.ask_depth_usdt;
