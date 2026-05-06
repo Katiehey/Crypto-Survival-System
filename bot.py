@@ -433,7 +433,7 @@ class PaperTradingEngine:
         net_pnl      = gross_pnl - exit_fee - pos["fee_paid"]
         pnl_pct      = net_pnl / pos["size_usdt"] * 100
 
-        self.balance += net_pnl + pos["size_usdt"]
+        self.balance += net_pnl
         self.in_trade = False
 
         result = {
