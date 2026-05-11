@@ -36,8 +36,9 @@ MAX_DRAWDOWN_KILL_SWITCH = float(os.getenv("MAX_DRAWDOWN_KILL_SWITCH", "0.25")) 
 COOLDOWN_MINUTES         = int(os.getenv("COOLDOWN_MINUTES", "15"))
 
 # ATR multipliers for dynamic SL / TP
-ATR_STOP_MULT   = float(os.getenv("ATR_STOP_MULT", "1.5"))
-ATR_TARGET_MULT = float(os.getenv("ATR_TARGET_MULT", "2.5"))   # realistic TP on 1h BTC
+# 1.5× SL was too tight for 1h BTC noise — raised to 2.0× to survive normal retracements
+ATR_STOP_MULT   = float(os.getenv("ATR_STOP_MULT", "2.0"))
+ATR_TARGET_MULT = float(os.getenv("ATR_TARGET_MULT", "3.0"))   # maintains ~1.5:1 RR with wider SL
 
 # Long-only mode: True for spot USDT accounts (cannot short BTC on spot)
 # Set to False only if using futures/margin.

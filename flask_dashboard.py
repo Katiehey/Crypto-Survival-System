@@ -349,7 +349,7 @@ HTML = """<!DOCTYPE html>
       <div style="max-height:228px;overflow-y:auto">
         <table class="table table-sm table-dark table-trades mb-0">
           <thead style="position:sticky;top:0;background:#21262d">
-            <tr><th>Date</th><th>Side</th><th>Entry</th><th>PnL</th></tr>
+            <tr><th>Entered</th><th>Side</th><th>Entry</th><th>PnL</th></tr>
           </thead>
           <tbody id="trades-body">
             <tr><td colspan="4" class="text-center g-dim py-3">No trades yet</td></tr>
@@ -566,7 +566,7 @@ function render(d) {
       const pnl = parseFloat(t.pnl_usdt || 0);
       const c = pnl >= 0 ? '#3fb950' : '#f85149';
       tbody += `<tr>
-        <td>${(t.timestamp||'').substring(5,10)}</td>
+        <td>${(t.entered_at||t.timestamp||'').substring(5,10)}</td>
         <td>${t.signal||''}</td>
         <td>$${parseFloat(t.entry_price||0).toLocaleString('en',{maximumFractionDigits:0})}</td>
         <td style="color:${c}">${pnl>=0?'+':''}${pnl.toFixed(4)}</td>

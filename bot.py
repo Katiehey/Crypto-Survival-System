@@ -70,6 +70,7 @@ def init_db(db_path: str = config.DB_PATH):
         CREATE TABLE IF NOT EXISTS trades (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp    TEXT NOT NULL,
+            entered_at   TEXT,
             signal       TEXT NOT NULL,
             regime       TEXT,
             entry_price  REAL,
@@ -84,6 +85,11 @@ def init_db(db_path: str = config.DB_PATH):
             notes        TEXT
         )
     """)
+    try:
+        conn.execute("ALTER TABLE trades ADD COLUMN entered_at TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # column already exists
     conn.execute("""
         CREATE TABLE IF NOT EXISTS decisions (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,12 +128,15 @@ def log_decision(conn, signal, confidence, regime_info, agent_signals, action):
 
 
 def log_trade(conn, trade_data: dict):
+    entered = trade_data.get("entered_at")
+    entered_at_iso = entered.isoformat() if isinstance(entered, datetime) else (entered or "")
     conn.execute(
-        "INSERT INTO trades (timestamp, signal, regime, entry_price, exit_price, "
+        "INSERT INTO trades (timestamp, entered_at, signal, regime, entry_price, exit_price, "
         "size_usdt, pnl_usdt, pnl_pct, stop_loss, take_profit, confidence, mode, notes) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             datetime.now(timezone.utc).isoformat(),
+            entered_at_iso,
             trade_data.get("signal", ""),
             trade_data.get("regime", ""),
             trade_data.get("entry_price", 0),
