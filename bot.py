@@ -377,7 +377,7 @@ class PaperTradingEngine:
         self.in_trade  = False
         self.position: dict = {}
 
-    def enter(self, signal: str, price: float, size_usdt: float, levels: dict) -> dict:
+    def enter(self, signal: str, price: float, size_usdt: float, levels: dict, regime: str = "") -> dict:
         if self.in_trade:
             return {}
 
@@ -389,6 +389,7 @@ class PaperTradingEngine:
         self.in_trade = True
         self.position = {
             "signal":      signal,
+            "regime":      regime,
             "entry_price": actual_price,
             "size_usdt":   size_usdt,
             "fee_paid":    fee_cost,
@@ -456,6 +457,36 @@ class PaperTradingEngine:
         logger.info(
             f"[PAPER] EXIT {signal}: entry={ep:.2f} exit={actual_exit:.2f} "
             f"PnL=${net_pnl:+.4f} ({pnl_pct:+.2f}%) [{result['exit_reason']}]"
+        )
+        return result
+
+    def force_exit(self, price: float, reason: str = "FORCED") -> dict:
+        """Exit the open position at a given price (e.g. regime flip)."""
+        if not self.in_trade:
+            return {}
+        pos          = self.position
+        signal       = pos["signal"]
+        ep           = pos["entry_price"]
+        slip_factor  = (1 - self.SLIPPAGE) if signal == "BUY" else (1 + self.SLIPPAGE)
+        actual_exit  = price * slip_factor
+        exit_fee     = pos["size_usdt"] * self.FEE
+        sign         = 1 if signal == "BUY" else -1
+        gross_pnl    = sign * (actual_exit - ep) / ep * pos["size_usdt"]
+        net_pnl      = gross_pnl - exit_fee - pos["fee_paid"]
+        pnl_pct      = net_pnl / pos["size_usdt"] * 100
+        self.balance += net_pnl
+        self.in_trade = False
+        result = {
+            **pos,
+            "exit_price":  actual_exit,
+            "exit_time":   datetime.now(timezone.utc),
+            "pnl_usdt":    round(net_pnl, 4),
+            "pnl_pct":     round(pnl_pct, 3),
+            "exit_reason": reason,
+        }
+        logger.info(
+            f"[PAPER] FORCE EXIT {signal}: entry={ep:.2f} exit={actual_exit:.2f} "
+            f"PnL=${net_pnl:+.4f} ({pnl_pct:+.2f}%) [{reason}]"
         )
         return result
 
@@ -577,12 +608,20 @@ class TradingBot:
 
         balance = self.risk.current_balance
 
-        # 3. Check open paper trade for exit
+        # 3. Detect regime (needed before exit check for regime-flip logic)
+        regime_info = self.regime_det.detect(df)
+        regime      = regime_info["regime"]
+
+        # 4. Check open paper trade for exit
         if self.paper_eng and self.paper_eng.in_trade:
-            exit_result = self.paper_eng.check_exit(high, low)
+            entry_regime = self.paper_eng.position.get("regime", "")
+            if entry_regime and regime != entry_regime:
+                exit_result = self.paper_eng.force_exit(close, "REGIME_FLIP")
+            else:
+                exit_result = self.paper_eng.check_exit(high, low)
             if exit_result:
                 self.risk.record_trade(exit_result["pnl_usdt"])
-                log_trade(self.db, {**exit_result, "regime": exit_result.get("signal", "")})
+                log_trade(self.db, exit_result)
                 send_telegram(
                     f"Trade closed [{exit_result['exit_reason']}]\n"
                     f"{exit_result['signal']} @ {exit_result['exit_price']:.2f}\n"
@@ -590,13 +629,9 @@ class TradingBot:
                     f"{self.risk.summary()}"
                 )
 
-        # 4. Skip entry if already in trade
+        # 5. Skip entry if already in trade
         if (self.paper_eng and self.paper_eng.in_trade) or self.risk.kill_switch:
             return
-
-        # 5. Detect regime
-        regime_info = self.regime_det.detect(df)
-        regime      = regime_info["regime"]
 
         # 6. Run 4-agent consensus (+ MTF filter + ML filter)
         risk_state  = self.risk.state()
@@ -611,13 +646,13 @@ class TradingBot:
             f"signal={signal} conf={confidence:.2f} | {self.risk.summary()}"
         )
 
-        # 8. Execute if consensus says go
-        if signal in ("BUY", "SELL"):
+        # 8. Execute if consensus says go and confidence is sufficient
+        if signal in ("BUY", "SELL") and confidence >= 0.6:
             levels   = self.strategy.compute_levels(df, signal, regime)
             size     = self.risk.position_size_usdt()
 
             if not self.live and self.paper_eng:
-                self.paper_eng.enter(signal, close, size, levels)
+                self.paper_eng.enter(signal, close, size, levels, regime)
                 send_telegram(
                     f"Trade entered [PAPER]\n"
                     f"{signal} @ {close:.2f}\n"

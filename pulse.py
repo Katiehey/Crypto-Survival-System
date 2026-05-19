@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import subprocess
+import sys
 import time
 
 ORACLE_IP = "64.181.218.172"
@@ -28,6 +29,9 @@ def ping(ip: str) -> bool:
 
 
 def beep(times: int = 3):
+    if sys.platform != "darwin":
+        print("[Pulse] WARNING: audio alert skipped — afplay is macOS-only")
+        return
     for _ in range(times):
         subprocess.run(["afplay", ALERT_SOUND])
         time.sleep(0.6)

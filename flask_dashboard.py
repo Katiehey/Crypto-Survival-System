@@ -71,6 +71,7 @@ def fetch_data() -> dict[str, Any]:
         "rsi_threshold": config.RSI_TREND_BUY_MIN,
         "adx_threshold": config.ADX_TREND_THRESHOLD,
         "vol_threshold": config.VOLUME_SPIKE_MIN,
+        "drawdown_threshold": config.MAX_DRAWDOWN_KILL_SWITCH * 100,
         "balance": config.STARTING_CAPITAL, "peak": config.STARTING_CAPITAL,
         "drawdown_pct": 0, "daily_pnl": 0,
         "trades_today": 0, "total_trades": 0,
@@ -154,20 +155,25 @@ def fetch_data() -> dict[str, Any]:
 
         # ── Database ──────────────────────────────────────────────────────────
         if Path(config.DB_PATH).exists():
-            conn   = sqlite3.connect(config.DB_PATH)
-            trades = pd.read_sql("SELECT * FROM trades ORDER BY id DESC LIMIT 100", conn)
+            conn      = sqlite3.connect(config.DB_PATH)
+            all_pnl   = pd.read_sql("SELECT pnl_usdt FROM trades ORDER BY id ASC", conn)
+            total_count = pd.read_sql("SELECT COUNT(*) as cnt FROM trades", conn)
+            trades    = pd.read_sql("SELECT * FROM trades ORDER BY id DESC LIMIT 100", conn)
             conn.close()
 
+            if not all_pnl.empty:
+                equity             = config.STARTING_CAPITAL + all_pnl["pnl_usdt"].cumsum()
+                d["balance"]       = float(equity.iloc[-1])
+                d["peak"]          = float(equity.expanding().max().iloc[-1])
+                d["drawdown_pct"]  = max(0.0, (d["peak"] - d["balance"]) / d["peak"] * 100)
+                d["total_trades"]  = int(total_count["cnt"].iloc[0])
+
             if not trades.empty:
-                d["total_trades"]  = len(trades)
                 d["recent_trades"] = trades.head(10).to_dict("records")
                 today   = datetime.now(timezone.utc).date().isoformat()
                 today_t = trades[trades["timestamp"].str.startswith(today)]
                 d["trades_today"] = len(today_t)
                 d["daily_pnl"]    = float(today_t["pnl_usdt"].sum()) if not today_t.empty else 0.0
-                d["balance"]      = config.STARTING_CAPITAL + float(trades["pnl_usdt"].sum())
-                d["peak"]         = max(config.STARTING_CAPITAL, d["balance"])
-                d["drawdown_pct"] = max(0.0, (d["peak"] - d["balance"]) / d["peak"] * 100)
 
                 wins   = trades[trades["pnl_usdt"] > 0]
                 losses = trades[trades["pnl_usdt"] < 0]
@@ -486,7 +492,7 @@ function render(d) {
   // Agents
   const volOk   = d.vol_ratio >= d.vol_threshold;
   const mtfOk   = d.ema20_4h  > d.ema50_4h;
-  const riskOk  = d.drawdown_pct < 25;
+  const riskOk  = d.drawdown_pct < d.drawdown_threshold;
   let techOk;
   if (isRanging) {
     techOk = d.rsi < d.rsi_threshold && d.price < d.bb_lower && d.price > d.ema200;

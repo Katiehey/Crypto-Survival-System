@@ -44,8 +44,8 @@ ATR_TARGET_MULT = float(os.getenv("ATR_TARGET_MULT", "3.0"))   # maintains ~1.5:
 # Set to False only if using futures/margin.
 LONG_ONLY = os.getenv("LONG_ONLY", "true").lower() == "true"
 
-# Volume spike filter: current bar volume must exceed N × 20-bar average
-VOLUME_SPIKE_MIN = float(os.getenv("VOLUME_SPIKE_MIN", "1.2"))  # compared against 50-bar avg, not 20
+# Volume spike filter: current bar volume must exceed N × 50-bar average
+VOLUME_SPIKE_MIN = float(os.getenv("VOLUME_SPIKE_MIN", "1.2"))
 
 # ─── Strategy ────────────────────────────────────────────────────────────────
 DATA_UPDATE_INTERVAL  = int(os.getenv("DATA_UPDATE_INTERVAL", "60"))   # seconds

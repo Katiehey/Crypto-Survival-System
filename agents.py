@@ -15,7 +15,6 @@ from datetime import datetime, timezone
 
 import pandas as pd
 import feedparser
-from bs4 import BeautifulSoup
 import requests
 
 import config
@@ -74,11 +73,19 @@ class TechnicalAgent:
             hist         = macd_line - signal_line
             macd_hist    = hist.iloc[-1]
             macd_hist_1  = hist.iloc[-2]   # previous bar
-            # Crossover within last 2 bars — enter close to the actual cross, not late
-            macd_cross_up   = (macd_line.iloc[-1] > signal_line.iloc[-1] and
-                               macd_line.iloc[-2] <= signal_line.iloc[-2])
-            macd_cross_down = (macd_line.iloc[-1] < signal_line.iloc[-1] and
-                               macd_line.iloc[-2] >= signal_line.iloc[-2])
+            # Crossover within last 5 bars — RSI > threshold and a fresh cross
+            # rarely coincide on the exact same bar; 5-bar window catches entries
+            # that are still early without chasing aged momentum.
+            macd_cross_up   = any(
+                macd_line.iloc[-(k+2)] <= signal_line.iloc[-(k+2)] and
+                macd_line.iloc[-(k+1)] >  signal_line.iloc[-(k+1)]
+                for k in range(5)
+            )
+            macd_cross_down = any(
+                macd_line.iloc[-(k+2)] >= signal_line.iloc[-(k+2)] and
+                macd_line.iloc[-(k+1)] <  signal_line.iloc[-(k+1)]
+                for k in range(5)
+            )
             # Histogram momentum: histogram must be expanding (gaining strength)
             hist_expanding_up   = macd_hist > 0 and macd_hist > macd_hist_1
             hist_expanding_down = macd_hist < 0 and macd_hist < macd_hist_1
@@ -133,7 +140,7 @@ class TechnicalAgent:
 
             else:  # ranging / mean reversion
                 # Only buy dips that are above the 200 EMA — not catching falling knives
-                if (bb_wide_enough and last_close <= bb_lower.iloc[-1]
+                if (bb_wide_enough and last_close <= bb_lower.iloc[-1] * 1.005
                         and last_rsi < config.RSI_RANGE_BUY_MAX
                         and above_ema200):
                     signals.append("BUY")
@@ -310,7 +317,7 @@ class RiskAgent:
     - Trades per day
     """
 
-    def analyse(self, risk_state: dict, df: pd.DataFrame) -> AgentSignal:
+    def analyse(self, risk_state: dict, df: pd.DataFrame, signal: Signal = "BUY") -> AgentSignal:
         """
         risk_state keys:
             peak_balance, current_balance, daily_start_balance,
@@ -362,7 +369,7 @@ class RiskAgent:
                                    f"Excessive volatility: ATR={atr_pct:.1%} of price")
 
             confidence = 1.0 - (drawdown / config.MAX_DRAWDOWN_KILL_SWITCH) * 0.5
-            return AgentSignal("risk", "BUY", round(confidence, 2),
+            return AgentSignal("risk", signal, round(confidence, 2),
                                f"Risk OK: drawdown={drawdown:.1%}, daily_loss={daily_loss:.1%}, ATR={atr_pct:.2%}")
 
         except Exception as e:
@@ -457,24 +464,20 @@ class ConsensusEngine:
         """
         tech_sig = self.technical.analyse(df, regime, df_4h)
         sent_sig = self.sentiment.analyse()
-        risk_sig = self.risk_agent.analyse(risk_state, df)
-
-        # Risk HOLD is always a hard block
-        if risk_sig.signal == "HOLD":
-            logger.info(f"[CONSENSUS] Blocked by Risk: {risk_sig.reason}")
-            return "HOLD", 0.0, [tech_sig, sent_sig, risk_sig]
 
         # Technical must have a directional view
         if tech_sig.signal == "HOLD":
             logger.info(f"[CONSENSUS] No signal from Technical: {tech_sig.reason}")
-            return "HOLD", 0.0, [tech_sig, sent_sig, risk_sig]
+            return "HOLD", 0.0, [tech_sig, sent_sig]
 
-        # Sentiment must not oppose (HOLD is neutral — allowed)
+        # Sentiment affects confidence only — no veto.
+        # RSS keyword scoring has too much noise to reliably block valid signals.
         direction = tech_sig.signal
-        if sent_sig.signal not in (direction, "HOLD"):
-            logger.info(
-                f"[CONSENSUS] Sentiment disagrees: tech={direction}, sent={sent_sig.signal}"
-            )
+
+        # Risk HOLD is always a hard block; pass direction so approval is directional
+        risk_sig = self.risk_agent.analyse(risk_state, df, direction)
+        if risk_sig.signal == "HOLD":
+            logger.info(f"[CONSENSUS] Blocked by Risk: {risk_sig.reason}")
             return "HOLD", 0.0, [tech_sig, sent_sig, risk_sig]
 
         # ML filter — skip low-probability setups (transparent if not yet trained)

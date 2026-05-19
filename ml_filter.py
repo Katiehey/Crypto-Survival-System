@@ -84,8 +84,8 @@ def extract_features(df: pd.DataFrame, signal: str) -> dict:
     ema50_dist  = (lc - float(ema50.iloc[-1]))  / lc
     ema200_dist = (lc - float(ema200.iloc[-1])) / lc
 
-    # ── Volume ratio (current vs 20-bar avg) ──────────────────────────────────
-    vol_avg   = float(df["volume"].rolling(20).mean().iloc[-1])
+    # ── Volume ratio (current vs 50-bar avg, matches TechnicalAgent) ─────────
+    vol_avg   = float(df["volume"].rolling(50).mean().iloc[-1])
     vol_ratio = float(df["volume"].iloc[-1]) / vol_avg if vol_avg > 0 else 1.0
 
     # ── ADX(14) ───────────────────────────────────────────────────────────────

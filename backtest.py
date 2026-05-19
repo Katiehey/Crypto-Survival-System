@@ -91,18 +91,25 @@ class WalkForwardBacktester:
 
     # ─── Public API ──────────────────────────────────────────────────────────
 
-    def run(self, df: pd.DataFrame) -> BacktestResult:
-        """Run walk-forward test on a DataFrame of OHLCV data."""
+    def run(self, df: pd.DataFrame, df_4h: pd.DataFrame | None = None) -> BacktestResult:
+        """Run walk-forward test on a DataFrame of OHLCV data.
+
+        df_4h: optional 4h OHLCV covering the same date range as df. When
+               provided, each simulated bar passes the aligned 4h window to
+               TechnicalAgent for multi-timeframe confirmation — matching live
+               bot behaviour exactly.
+        """
         logger.info(
             f"Walk-forward backtest: {len(df)} bars, "
             f"IS={self.in_sample} OS={self.out_sample} step={self.step}"
+            + (f", 4h bars={len(df_4h)}" if df_4h is not None else ", no 4h data")
         )
 
         all_trades:  list[Trade] = []
         fold_results: list[dict] = []
 
         for fold_idx, (train_df, test_df) in enumerate(self._folds(df)):
-            fold_trades = self._simulate_fold(train_df, test_df)
+            fold_trades = self._simulate_fold(train_df, test_df, df_4h)
             fold_stats  = self._fold_stats(fold_trades)
             fold_stats["fold"] = fold_idx + 1
             fold_results.append(fold_stats)
@@ -160,7 +167,7 @@ class WalkForwardBacktester:
             yield train_df, test_df
             start += self.step
 
-    def _simulate_fold(self, train_df: pd.DataFrame, test_df: pd.DataFrame) -> list[Trade]:
+    def _simulate_fold(self, train_df: pd.DataFrame, test_df: pd.DataFrame, df_4h: pd.DataFrame | None = None) -> list[Trade]:
         """
         Simulate bar-by-bar trading on the out-of-sample (test) window.
         Uses the tail of train_df as indicator lookback context so the
@@ -189,7 +196,11 @@ class WalkForwardBacktester:
             close  = row["close"]
 
             if in_trade:
-                # Check exit conditions
+                # Regime-flip exit: close at bar close if market has shifted
+                current_regime = self.regime_det.detect(window)["regime"]
+                regime_flipped = current_regime != entry_regime
+
+                # Check SL/TP exit conditions
                 if entry_signal == "BUY":
                     hit_stop   = row["low"]   <= stop_loss
                     hit_target = row["high"]  >= take_profit
@@ -199,8 +210,11 @@ class WalkForwardBacktester:
                 else:
                     hit_stop = hit_target = False
 
-                if hit_stop or hit_target:
-                    exit_price = take_profit if hit_target else stop_loss
+                if hit_stop or hit_target or regime_flipped:
+                    if regime_flipped and not hit_stop and not hit_target:
+                        exit_price = close  # exit at bar close on regime flip
+                    else:
+                        exit_price = stop_loss if hit_stop else take_profit
                     sign       = 1 if entry_signal == "BUY" else -1
                     gross_pnl  = sign * (exit_price - entry_price) / entry_price * size_usdt
                     fee        = size_usdt * self.BINANCE_FEE * 2  # entry + exit
@@ -228,9 +242,18 @@ class WalkForwardBacktester:
                 # Look for entry signal
                 regime_info = self.regime_det.detect(window)
                 regime      = regime_info["regime"]
-                tech_signal = self.technical.analyse(window, regime)
 
-                if tech_signal.signal in ("BUY", "SELL") and tech_signal.confidence >= 0.4:
+                # Align 4h data to current bar's timestamp
+                window_4h = None
+                if df_4h is not None:
+                    ts = context.index[i]
+                    _slice = df_4h.loc[:ts].iloc[-100:]
+                    if len(_slice) >= 50:
+                        window_4h = _slice
+
+                tech_signal = self.technical.analyse(window, regime, df_4h=window_4h)
+
+                if tech_signal.signal in ("BUY", "SELL") and tech_signal.confidence >= 0.6:
                     levels = self.strategy.compute_levels(window, tech_signal.signal, regime)
                     if not levels:
                         continue
@@ -295,9 +318,13 @@ class WalkForwardBacktester:
         drawdown = (peak - equity) / (peak + self.capital)
         max_dd   = float(drawdown.max()) * 100
 
-        daily_returns = pd.Series(pnls)
-        sharpe = (daily_returns.mean() / daily_returns.std() * np.sqrt(252)
-                  if daily_returns.std() > 0 else 0)
+        returns = pd.Series([t.pnl_usdt / t.size_usdt for t in trades])
+        if len(trades) >= 2 and returns.std() > 0:
+            total_days = (trades[-1].exit_time - trades[0].entry_time).total_seconds() / 86400
+            trades_per_year = len(trades) / max(total_days, 1) * 365
+            sharpe = returns.mean() / returns.std() * np.sqrt(trades_per_year)
+        else:
+            sharpe = 0.0
 
         return {
             "total_return_pct":  round(total_return, 2),
@@ -321,9 +348,13 @@ class WalkForwardBacktester:
         peak    = np.maximum.accumulate(equity)
         dd_pct  = ((peak - equity) / peak * 100).max()
 
-        daily   = pd.Series(pnls)
-        sharpe  = (daily.mean() / daily.std() * np.sqrt(252)
-                   if daily.std() > 0 else 0)
+        returns = pd.Series([t.pnl_usdt / t.size_usdt for t in trades])
+        if len(trades) >= 2 and returns.std() > 0:
+            total_days = (trades[-1].exit_time - trades[0].entry_time).total_seconds() / 86400
+            trades_per_year = len(trades) / max(total_days, 1) * 365
+            sharpe = returns.mean() / returns.std() * np.sqrt(trades_per_year)
+        else:
+            sharpe = 0.0
 
         profit_factor = (sum(wins) / abs(sum(losses))
                          if losses else float("inf"))
@@ -412,8 +443,9 @@ class WalkForwardBacktester:
                 continue
             features_list.append(t.features)
             outcomes.append(1 if t.pnl_usdt > 0 else 0)
+        win_rate_str = f"{sum(outcomes)/len(outcomes):.1%}" if outcomes else "n/a"
         logger.info(
             f"Extracted {len(features_list)} labelled trades for ML training "
-            f"(win_rate={sum(outcomes)/len(outcomes):.1%} if outcomes else 'n/a')"
+            f"(win_rate={win_rate_str})"
         )
         return features_list, outcomes

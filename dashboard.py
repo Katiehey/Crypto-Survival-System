@@ -157,6 +157,10 @@ def fetch_data() -> DashboardData:
         # ── Database ──────────────────────────────────────────────────────────
         if Path(config.DB_PATH).exists():
             conn = sqlite3.connect(config.DB_PATH)
+            all_pnl = pd.read_sql(
+                "SELECT pnl_usdt FROM trades ORDER BY id ASC", conn
+            )
+            total_count = pd.read_sql("SELECT COUNT(*) as cnt FROM trades", conn)
             trades = pd.read_sql(
                 "SELECT * FROM trades ORDER BY id DESC LIMIT 10", conn
             )
@@ -165,18 +169,19 @@ def fetch_data() -> DashboardData:
             )
             conn.close()
 
+            if not all_pnl.empty:
+                equity         = config.STARTING_CAPITAL + all_pnl["pnl_usdt"].cumsum()
+                d.balance      = float(equity.iloc[-1])
+                d.peak         = float(equity.expanding().max().iloc[-1])
+                d.drawdown_pct = max(0.0, (d.peak - d.balance) / d.peak * 100)
+                d.total_trades = int(total_count["cnt"].iloc[0])
+
             if not trades.empty:
-                d.total_trades = len(trades)
                 d.recent_trades = trades.head(3).to_dict("records")
                 today = datetime.now(timezone.utc).date().isoformat()
                 today_trades = trades[trades["timestamp"].str.startswith(today)]
                 d.trades_today = len(today_trades)
                 d.daily_pnl    = float(today_trades["pnl_usdt"].sum()) if not today_trades.empty else 0.0
-
-                # Reconstruct balance from starting capital + all PnL
-                d.balance  = config.STARTING_CAPITAL + float(trades["pnl_usdt"].sum())
-                d.peak     = max(config.STARTING_CAPITAL, d.balance)
-                d.drawdown_pct = max(0.0, (d.peak - d.balance) / d.peak * 100)
 
         # ── System ────────────────────────────────────────────────────────────
         d.cpu_pct     = psutil.cpu_percent(interval=0.1)
@@ -278,12 +283,12 @@ def _heat_panel(d: DashboardData) -> Panel:
         rsi_heat = max(0, (50 - d.rsi) / (50 - config.RSI_RANGE_BUY_MAX) * 100)
         row(f"RSI → {config.RSI_RANGE_BUY_MAX}", rsi_heat, f"{d.rsi:.1f}")
 
-        # Price vs lower BB
-        if d.bb_lower > 0:
-            bb_heat = max(0, min(100, (1 - (d.price - d.bb_lower) /
-                         max(0.01, d.price - d.bb_lower + 500)) * 100))
+        # Price vs lower BB — heat = 100% at/below lower band, 0% at/above upper band
+        bb_range = d.bb_upper - d.bb_lower
+        if bb_range > 0:
+            bb_heat = max(0.0, min(100.0, (d.bb_upper - d.price) / bb_range * 100))
         else:
-            bb_heat = 0
+            bb_heat = 0.0
         row("Price vs BB low", bb_heat, f"${d.price - d.bb_lower:+.0f}")
 
         above_ema200 = d.price > d.ema200

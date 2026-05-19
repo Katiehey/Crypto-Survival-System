@@ -61,7 +61,15 @@ class RiskEngine:
             size = config.MIN_ORDER_USDT
         else:
             size = max(risk_based, config.MIN_ORDER_USDT)
-        return round(min(size, self.current_balance * 0.95), 2)  # never >95% of balance
+        size = round(min(size, self.current_balance * 0.95), 2)
+        pct_of_balance = size / self.current_balance if self.current_balance > 0 else 0
+        if pct_of_balance > 0.15:
+            logger.warning(
+                f"Position size ${size:.2f} is {pct_of_balance:.0%} of balance "
+                f"${self.current_balance:.2f} — Binance minimum forces outsized risk "
+                f"(target was {config.MAX_RISK_PER_TRADE:.1%})"
+            )
+        return size
 
     # ─── Trade result recording ───────────────────────────────────────────────
 

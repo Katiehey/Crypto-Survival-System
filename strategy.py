@@ -39,7 +39,15 @@ class RegimeDetector:
             last_plus_di  = plus_di.iloc[-1]
             last_minus_di = minus_di.iloc[-1]
 
-            regime = "trending" if last_adx > self.threshold else "ranging"
+            # Require 3 consecutive bars above/below threshold before flipping
+            # regime — prevents whipsawing when ADX hovers near the boundary.
+            recent_adx = adx.iloc[-3:]
+            if all(a > self.threshold for a in recent_adx):
+                regime = "trending"
+            elif all(a <= self.threshold for a in recent_adx):
+                regime = "ranging"
+            else:
+                regime = "ranging"  # transitioning — stay conservative
 
             if regime == "trending":
                 direction = "up" if last_plus_di > last_minus_di else "down"

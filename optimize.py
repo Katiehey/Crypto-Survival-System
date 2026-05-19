@@ -31,7 +31,7 @@ logger = logging.getLogger("optimize")
 BEST_PARAMS_PATH = Path("ops/best_params.json")
 
 
-def run_optimization(n_trials: int = 100, metric: str = "sharpe") -> dict | None:
+def run_optimization(n_trials: int = 100, metric: str = "sharpe", days: int = 730) -> dict | None:
     try:
         import optuna
         optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -41,22 +41,21 @@ def run_optimization(n_trials: int = 100, metric: str = "sharpe") -> dict | None
 
     from backtest import WalkForwardBacktester
 
-    print("Fetching historical data (this may take ~30s)...")
+    print(f"Fetching {days} days of historical data (this may take ~90s)...")
     bt = WalkForwardBacktester()
-    df = bt.fetch_historical(days=400)
-    print(f"Fetched {len(df)} candles. Starting {n_trials}-trial search...\n")
+    df    = bt.fetch_historical(days=days, timeframe="1h")
+    df_4h = bt.fetch_historical(days=days, timeframe="4h")
+    print(f"Fetched {len(df)} 1h candles, {len(df_4h)} 4h candles. Starting {n_trials}-trial search...\n")
 
     def objective(trial: "optuna.Trial") -> float:  # type: ignore[name-defined]
         # ── Override config module attributes for this trial ──────────────────
         # (Python modules are singletons — all code in the same process sees this)
         config.RSI_TREND_BUY_MIN   = trial.suggest_float("rsi_trend_buy_min",  50.0, 65.0)
-        config.RSI_TREND_SELL_MAX  = trial.suggest_float("rsi_trend_sell_max", 35.0, 50.0)
         config.RSI_RANGE_BUY_MAX   = trial.suggest_float("rsi_range_buy_max",  22.0, 38.0)
-        config.RSI_RANGE_SELL_MIN  = trial.suggest_float("rsi_range_sell_min", 62.0, 78.0)
         config.ADX_TREND_THRESHOLD = trial.suggest_float("adx_threshold",      18.0, 35.0)
         config.ATR_STOP_MULT       = trial.suggest_float("atr_stop_mult",       1.0,  2.5)
         config.ATR_TARGET_MULT     = trial.suggest_float("atr_target_mult",     1.5,  4.5)
-        config.VOLUME_SPIKE_MIN    = trial.suggest_float("volume_spike_min",    1.0,  2.0)
+        config.VOLUME_SPIKE_MIN    = trial.suggest_float("volume_spike_min",    1.0,  3.0)
 
         # Re-instantiate classes that read config at construction time
         from agents import TechnicalAgent
@@ -65,7 +64,7 @@ def run_optimization(n_trials: int = 100, metric: str = "sharpe") -> dict | None
         bt.regime_det = RegimeDetector()
         bt.strategy   = TradingStrategy()
 
-        result = bt.run(df)
+        result = bt.run(df, df_4h=df_4h)
 
         # Require at least 20 trades — fewer means the optimizer is cherry-picking
         # a handful of lucky trades, which inflates Sharpe artificially
@@ -81,6 +80,8 @@ def run_optimization(n_trials: int = 100, metric: str = "sharpe") -> dict | None
         return result.sharpe_ratio
 
     study = optuna.create_study(direction="maximize")
+    # WARNING: do not pass n_jobs > 1 here — the objective mutates config module
+    # attributes (shared singleton), which causes data races under parallelism.
     study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
 
     best   = study.best_params
@@ -96,9 +97,7 @@ def run_optimization(n_trials: int = 100, metric: str = "sharpe") -> dict | None
     print()
     env_lines = [
         f"RSI_TREND_BUY_MIN={best['rsi_trend_buy_min']:.1f}",
-        f"RSI_TREND_SELL_MAX={best['rsi_trend_sell_max']:.1f}",
         f"RSI_RANGE_BUY_MAX={best['rsi_range_buy_max']:.1f}",
-        f"RSI_RANGE_SELL_MIN={best['rsi_range_sell_min']:.1f}",
         f"ADX_TREND_THRESHOLD={best['adx_threshold']:.1f}",
         f"ATR_STOP_MULT={best['atr_stop_mult']:.2f}",
         f"ATR_TARGET_MULT={best['atr_target_mult']:.2f}",
@@ -135,8 +134,12 @@ def main():
         default="sharpe",
         help="Objective to maximise (default: sharpe)",
     )
+    parser.add_argument(
+        "--days", type=int, default=730,
+        help="Days of historical data to fetch (default: 730 = ~2 years)",
+    )
     args = parser.parse_args()
-    run_optimization(args.trials, args.metric)
+    run_optimization(args.trials, args.metric, args.days)
 
 
 if __name__ == "__main__":

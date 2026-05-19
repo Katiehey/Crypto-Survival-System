@@ -42,49 +42,659 @@ The content is organized as follows:
 <directory_structure>
 ops/
   best_params.json
-  signal_filter.pkl
 .gitignore
 agents.py
 backtest.py
 bot.py
 config.py
+dashboard.py
+flask_dashboard.py
 ml_filter.py
 optimize.py
+pulse.py
 README.md
 requirements.txt
 risk.py
 strategy.py
+test_4h_mtf.py
 </directory_structure>
 
 <files>
 This section contains the contents of the repository's files.
 
+<file path="test_4h_mtf.py">
+"""
+Quick A/B test: compare 4h MTF condition
+  A) EMA20 > EMA50  (current — lagging crossover)
+  B) price > EMA50  (proposed — faster confirmation)
+
+Run: python test_4h_mtf.py
+"""
+import types
+from backtest import WalkForwardBacktester
+from agents import TechnicalAgent
+
+print("Fetching 730 days of data (shared across both runs)...")
+bt    = WalkForwardBacktester()
+df    = bt.fetch_historical(days=730, timeframe="1h")
+df_4h = bt.fetch_historical(days=730, timeframe="4h")
+print(f"Fetched {len(df)} 1h candles, {len(df_4h)} 4h candles.\n")
+
+
+def run(label: str, use_price_vs_ema50: bool):
+    # Patch _check_4h_alignment on TechnicalAgent
+    if use_price_vs_ema50:
+        def _check(df_4h, signal):
+            import pandas as pd
+            close_4h = df_4h["close"]
+            ema50_4h = close_4h.ewm(span=50, adjust=False).mean()
+            if signal == "BUY":
+                return float(close_4h.iloc[-1]) > float(ema50_4h.iloc[-1])
+            else:
+                return float(close_4h.iloc[-1]) < float(ema50_4h.iloc[-1])
+    else:
+        def _check(df_4h, signal):
+            close_4h = df_4h["close"]
+            ema20_4h = close_4h.ewm(span=20, adjust=False).mean()
+            ema50_4h = close_4h.ewm(span=50, adjust=False).mean()
+            if signal == "BUY":
+                return float(ema20_4h.iloc[-1]) > float(ema50_4h.iloc[-1])
+            else:
+                return float(ema20_4h.iloc[-1]) < float(ema50_4h.iloc[-1])
+
+    TechnicalAgent._check_4h_alignment = staticmethod(_check)
+    bt.technical = TechnicalAgent()
+
+    print(f"{'─'*50}")
+    print(f"  {label}")
+    print(f"{'─'*50}")
+    result = bt.run(df, df_4h=df_4h)
+    print(f"  Sharpe:        {result.sharpe_ratio:.3f}")
+    print(f"  Total return:  {result.total_return_pct:+.2f}%")
+    print(f"  Win rate:      {result.win_rate_pct:.1f}%")
+    print(f"  Total trades:  {result.total_trades}")
+    print(f"  Max drawdown:  {result.max_drawdown_pct:.2f}%")
+    print(f"  Profit factor: {result.profit_factor:.2f}")
+    print()
+    return result
+
+
+a = run("A — EMA20 > EMA50 on 4h (current)", use_price_vs_ema50=False)
+b = run("B — price > EMA50 on 4h (proposed)", use_price_vs_ema50=True)
+
+print("─" * 50)
+print("  COMPARISON  (B minus A)")
+print("─" * 50)
+print(f"  Sharpe:        {b.sharpe_ratio - a.sharpe_ratio:+.3f}")
+print(f"  Total return:  {b.total_return_pct - a.total_return_pct:+.2f}%")
+print(f"  Win rate:      {b.win_rate_pct - a.win_rate_pct:+.1f}%")
+print(f"  Total trades:  {b.total_trades - a.total_trades:+d}  (more = catches more entries)")
+print(f"  Max drawdown:  {b.max_drawdown_pct - a.max_drawdown_pct:+.2f}%")
+print()
+winner = "B (price > EMA50)" if b.sharpe_ratio > a.sharpe_ratio else "A (EMA20 > EMA50)"
+print(f"  Winner by Sharpe: {winner}")
+</file>
+
 <file path="ops/best_params.json">
 {
   "metric": "sharpe",
-  "best_value": 25.42,
+  "best_value": 0.64,
   "n_trials": 100,
   "params": {
-    "rsi_trend_buy_min": 64.054,
-    "rsi_trend_sell_max": 42.0781,
-    "rsi_range_buy_max": 23.6636,
-    "rsi_range_sell_min": 64.9741,
-    "adx_threshold": 27.696,
-    "atr_stop_mult": 2.0585,
-    "atr_target_mult": 2.4355,
-    "volume_spike_min": 1.9702
+    "rsi_trend_buy_min": 55.2106,
+    "rsi_trend_sell_max": 49.0118,
+    "rsi_range_buy_max": 28.8208,
+    "rsi_range_sell_min": 65.8087,
+    "adx_threshold": 33.97,
+    "atr_stop_mult": 1.8476,
+    "atr_target_mult": 1.966,
+    "volume_spike_min": 1.999
   },
   "env_lines": [
-    "RSI_TREND_BUY_MIN=64.1",
-    "RSI_TREND_SELL_MAX=42.1",
-    "RSI_RANGE_BUY_MAX=23.7",
-    "RSI_RANGE_SELL_MIN=65.0",
-    "ADX_TREND_THRESHOLD=27.7",
-    "ATR_STOP_MULT=2.06",
-    "ATR_TARGET_MULT=2.44",
-    "VOLUME_SPIKE_MIN=1.97"
+    "RSI_TREND_BUY_MIN=55.2",
+    "RSI_TREND_SELL_MAX=49.0",
+    "RSI_RANGE_BUY_MAX=28.8",
+    "RSI_RANGE_SELL_MIN=65.8",
+    "ADX_TREND_THRESHOLD=34.0",
+    "ATR_STOP_MULT=1.85",
+    "ATR_TARGET_MULT=1.97",
+    "VOLUME_SPIKE_MIN=2.00"
   ]
 }
+</file>
+
+<file path="dashboard.py">
+"""
+dashboard.py — Real-time terminal dashboard for the trading bot.
+
+Run in a separate terminal alongside bot.py:
+    python dashboard.py
+
+Read-only: does NOT interfere with the running bot.
+Refreshes every 30 seconds (matches bot tick interval).
+"""
+from __future__ import annotations
+
+import sqlite3
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+
+import ccxt
+import pandas as pd
+import psutil
+from rich import box
+from rich.align import Align
+from rich.columns import Columns
+from rich.console import Console
+from rich.layout import Layout
+from rich.live import Live
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+
+import config
+from strategy import RegimeDetector
+
+console = Console()
+_start_time = time.monotonic()
+REFRESH_SECONDS = 30
+
+
+# ─── Data container ───────────────────────────────────────────────────────────
+
+@dataclass
+class DashboardData:
+    # Price
+    price:        float = 0.0
+    price_change: float = 0.0   # % vs 24h ago
+
+    # Indicators
+    rsi:          float = 0.0
+    adx:          float = 0.0
+    macd_hist:    float = 0.0
+    macd_cross_up: bool = False
+    ema20:        float = 0.0
+    ema50:        float = 0.0
+    ema200:       float = 0.0
+    bb_lower:     float = 0.0
+    bb_upper:     float = 0.0
+    vol_ratio:    float = 0.0   # current / 50-bar avg
+    regime:       str   = "unknown"
+    plus_di:      float = 0.0
+    minus_di:     float = 0.0
+
+    # 4h
+    ema20_4h:     float = 0.0
+    ema50_4h:     float = 0.0
+
+    # Account (from DB)
+    balance:      float = config.STARTING_CAPITAL
+    peak:         float = config.STARTING_CAPITAL
+    drawdown_pct: float = 0.0
+    daily_pnl:    float = 0.0
+    trades_today: int   = 0
+    total_trades: int   = 0
+
+    # Recent trades
+    recent_trades: list[dict] = field(default_factory=list)
+
+    # System
+    cpu_pct:      float = 0.0
+    ram_used_mb:  float = 0.0
+    ram_total_mb: float = 0.0
+
+    # Meta
+    last_updated: str = "—"
+    error:        str = ""
+
+
+# ─── Data fetcher ─────────────────────────────────────────────────────────────
+
+def _build_exchange():
+    if config.EXCHANGE == "kucoin":
+        return ccxt.kucoin({"enableRateLimit": True})
+    return ccxt.binance({"enableRateLimit": True})
+
+
+def _rsi(series: pd.Series, period: int = 14) -> float:
+    delta = series.diff()
+    gain  = delta.clip(lower=0).rolling(period).mean()
+    loss  = (-delta.clip(upper=0)).rolling(period).mean()
+    rs    = gain / loss.replace(0, 1e-10)
+    return float((100 - (100 / (1 + rs))).iloc[-1])
+
+
+def _bollinger(series: pd.Series, period=20, std_dev=2):
+    mid   = series.rolling(period).mean()
+    std   = series.rolling(period).std()
+    return float((mid + std_dev * std).iloc[-1]), float((mid - std_dev * std).iloc[-1])
+
+
+def fetch_data() -> DashboardData:
+    d = DashboardData()
+    try:
+        exchange = _build_exchange()
+
+        # ── 1h OHLCV ──────────────────────────────────────────────────────────
+        ohlcv = exchange.fetch_ohlcv(config.TRADING_PAIR, "1h", limit=300)
+        df = pd.DataFrame(ohlcv, columns=["ts", "open", "high", "low", "close", "volume"])
+        df["ts"] = pd.to_datetime(df["ts"], unit="ms", utc=True)
+        df = df.set_index("ts")
+
+        close = df["close"]
+        d.price = float(close.iloc[-1])
+        d.price_change = (d.price - float(close.iloc[-25])) / float(close.iloc[-25]) * 100
+
+        # Indicators
+        d.rsi = _rsi(close)
+
+        ema_fast  = close.ewm(span=12, adjust=False).mean()
+        ema_slow  = close.ewm(span=26, adjust=False).mean()
+        macd_line = ema_fast - ema_slow
+        sig_line  = macd_line.ewm(span=9, adjust=False).mean()
+        hist      = macd_line - sig_line
+        d.macd_hist     = float(hist.iloc[-1])
+        d.macd_cross_up = (macd_line.iloc[-1] > sig_line.iloc[-1] and
+                           macd_line.iloc[-2] <= sig_line.iloc[-2])
+
+        d.ema20  = float(close.ewm(span=20,  adjust=False).mean().iloc[-1])
+        d.ema50  = float(close.ewm(span=50,  adjust=False).mean().iloc[-1])
+        d.ema200 = float(close.ewm(span=200, adjust=False).mean().iloc[-1])
+        d.bb_upper, d.bb_lower = _bollinger(close)
+
+        vol_avg   = float(df["volume"].rolling(50).mean().iloc[-1])
+        d.vol_ratio = float(df["volume"].iloc[-1]) / vol_avg if vol_avg > 0 else 0.0
+
+        regime_info = RegimeDetector().detect(df)
+        d.regime   = regime_info["regime"]
+        d.adx      = regime_info["adx"]
+        d.plus_di  = regime_info["plus_di"]
+        d.minus_di = regime_info["minus_di"]
+
+        # ── 4h OHLCV ──────────────────────────────────────────────────────────
+        ohlcv_4h = exchange.fetch_ohlcv(config.TRADING_PAIR, "4h", limit=100)
+        df4 = pd.DataFrame(ohlcv_4h, columns=["ts","open","high","low","close","volume"])
+        close4 = df4["close"]
+        d.ema20_4h = float(close4.ewm(span=20, adjust=False).mean().iloc[-1])
+        d.ema50_4h = float(close4.ewm(span=50, adjust=False).mean().iloc[-1])
+
+        # ── Database ──────────────────────────────────────────────────────────
+        if Path(config.DB_PATH).exists():
+            conn = sqlite3.connect(config.DB_PATH)
+            all_pnl = pd.read_sql(
+                "SELECT pnl_usdt FROM trades ORDER BY id ASC", conn
+            )
+            total_count = pd.read_sql("SELECT COUNT(*) as cnt FROM trades", conn)
+            trades = pd.read_sql(
+                "SELECT * FROM trades ORDER BY id DESC LIMIT 10", conn
+            )
+            decisions = pd.read_sql(
+                "SELECT * FROM decisions ORDER BY id DESC LIMIT 1", conn
+            )
+            conn.close()
+
+            if not all_pnl.empty:
+                equity         = config.STARTING_CAPITAL + all_pnl["pnl_usdt"].cumsum()
+                d.balance      = float(equity.iloc[-1])
+                d.peak         = float(equity.expanding().max().iloc[-1])
+                d.drawdown_pct = max(0.0, (d.peak - d.balance) / d.peak * 100)
+                d.total_trades = int(total_count["cnt"].iloc[0])
+
+            if not trades.empty:
+                d.recent_trades = trades.head(3).to_dict("records")
+                today = datetime.now(timezone.utc).date().isoformat()
+                today_trades = trades[trades["timestamp"].str.startswith(today)]
+                d.trades_today = len(today_trades)
+                d.daily_pnl    = float(today_trades["pnl_usdt"].sum()) if not today_trades.empty else 0.0
+
+        # ── System ────────────────────────────────────────────────────────────
+        d.cpu_pct     = psutil.cpu_percent(interval=0.1)
+        mem           = psutil.virtual_memory()
+        d.ram_used_mb = mem.used / 1024 / 1024
+        d.ram_total_mb = mem.total / 1024 / 1024
+
+        d.last_updated = datetime.now().strftime("%H:%M:%S")
+
+    except Exception as e:
+        d.error = str(e)
+
+    return d
+
+
+# ─── Heat helpers ─────────────────────────────────────────────────────────────
+
+def _heat_bar(pct: float, width: int = 20) -> Text:
+    """Returns a coloured progress bar string."""
+    pct = max(0.0, min(100.0, pct))
+    filled = int(width * pct / 100)
+    bar    = "█" * filled + "░" * (width - filled)
+
+    if pct >= 100:
+        style = "bold bright_red"
+    elif pct >= 80:
+        style = "red"
+    elif pct >= 60:
+        style = "yellow"
+    elif pct >= 40:
+        style = "green"
+    else:
+        style = "dim"
+
+    t = Text()
+    t.append(f"[{bar}] ", style=style)
+    t.append(f"{pct:5.1f}%", style=style)
+    return t
+
+
+def _check(condition: bool) -> Text:
+    t = Text()
+    if condition:
+        t.append("✅", style="green")
+    else:
+        t.append("❌", style="red")
+    return t
+
+
+# ─── Panel builders ───────────────────────────────────────────────────────────
+
+def _header(d: DashboardData) -> Text:
+    arrow  = "▲" if d.price_change >= 0 else "▼"
+    color  = "green" if d.price_change >= 0 else "red"
+    regime_color = "yellow" if d.regime == "trending" else "cyan"
+
+    t = Text()
+    t.append("  CRYPTO SURVIVAL SYSTEM  ", style="bold white on dark_blue")
+    t.append("  ")
+    t.append(f"BTC/USDT  ${d.price:,.2f}  ", style="bold white")
+    t.append(f"{arrow} {d.price_change:+.2f}%", style=f"bold {color}")
+    t.append("    Regime: ", style="dim")
+    t.append(d.regime.upper(), style=f"bold {regime_color}")
+    t.append(f"  ADX {d.adx:.1f}", style="dim")
+    if d.error:
+        t.append(f"  ⚠ {d.error[:60]}", style="bold red")
+    return t
+
+
+def _account_panel(d: DashboardData) -> Panel:
+    t = Table.grid(padding=(0, 2))
+    t.add_column(style="dim")
+    t.add_column(style="bold white")
+
+    dd_color = "red" if d.drawdown_pct > 10 else "green"
+    pnl_color = "green" if d.daily_pnl >= 0 else "red"
+
+    t.add_row("Balance",   f"${d.balance:.2f}")
+    t.add_row("Peak",      f"${d.peak:.2f}")
+    t.add_row("Drawdown",  Text(f"{d.drawdown_pct:.2f}%", style=dd_color))
+    t.add_row("PnL Today", Text(f"${d.daily_pnl:+.4f}", style=pnl_color))
+    t.add_row("Trades",    f"{d.trades_today}/2 today  ({d.total_trades} total)")
+
+    return Panel(t, title="[bold]ACCOUNT", border_style="blue", box=box.ROUNDED)
+
+
+def _heat_panel(d: DashboardData) -> Panel:
+    tbl = Table.grid(padding=(0, 1))
+    tbl.add_column(width=18, style="dim")
+    tbl.add_column(width=28)
+    tbl.add_column(width=8, style="dim")
+
+    def row(label, pct, value_str):
+        tbl.add_row(label, _heat_bar(pct), value_str)
+
+    if d.regime == "ranging":
+        tbl.add_row(Text("── RANGING MODE ──", style="cyan bold"), Text(""), Text(""))
+        # RSI needs to go DOWN to 23.7
+        rsi_heat = max(0, (50 - d.rsi) / (50 - config.RSI_RANGE_BUY_MAX) * 100)
+        row(f"RSI → {config.RSI_RANGE_BUY_MAX}", rsi_heat, f"{d.rsi:.1f}")
+
+        # Price vs lower BB — heat = 100% at/below lower band, 0% at/above upper band
+        bb_range = d.bb_upper - d.bb_lower
+        if bb_range > 0:
+            bb_heat = max(0.0, min(100.0, (d.bb_upper - d.price) / bb_range * 100))
+        else:
+            bb_heat = 0.0
+        row("Price vs BB low", bb_heat, f"${d.price - d.bb_lower:+.0f}")
+
+        above_ema200 = d.price > d.ema200
+        tbl.add_row("Above EMA200", _check(above_ema200),
+                    f"${d.price - d.ema200:+.0f}")
+
+    else:
+        tbl.add_row(Text("── TRENDING MODE ──", style="yellow bold"), Text(""), Text(""))
+        # RSI needs to go UP to 64.1
+        rsi_heat = max(0, min(100, (d.rsi - 50) / (config.RSI_TREND_BUY_MIN - 50) * 100))
+        row(f"RSI → {config.RSI_TREND_BUY_MIN}", rsi_heat, f"{d.rsi:.1f}")
+
+        ema_stack = d.ema20 > d.ema50 > d.ema200
+        tbl.add_row("EMA stack", _check(ema_stack), "20>50>200")
+
+        macd_heat = max(0, min(100, (d.macd_hist + 100) / 200 * 100))
+        row("MACD hist", macd_heat, f"{d.macd_hist:+.1f}")
+
+    # Volume (shared)
+    vol_heat = min(100, d.vol_ratio / config.VOLUME_SPIKE_MIN * 100)
+    row(f"Volume >{config.VOLUME_SPIKE_MIN}x", vol_heat, f"{d.vol_ratio:.2f}x")
+
+    # ADX
+    adx_heat = min(100, d.adx / config.ADX_TREND_THRESHOLD * 100)
+    row(f"ADX → {config.ADX_TREND_THRESHOLD}", adx_heat, f"{d.adx:.1f}")
+
+    # 4h alignment
+    aligned_4h = d.ema20_4h > d.ema50_4h
+    tbl.add_row("4h Trend", _check(aligned_4h),
+                "EMA20>50" if aligned_4h else "EMA20<50")
+
+    return Panel(tbl, title="[bold]SIGNAL HEAT", border_style="yellow", box=box.ROUNDED)
+
+
+def _agents_panel(d: DashboardData) -> Panel:
+    tbl = Table.grid(padding=(0, 2))
+    tbl.add_column(width=14, style="dim")
+    tbl.add_column(width=6)
+    tbl.add_column(style="dim")
+
+    # Technical
+    if d.regime == "ranging":
+        tech_ok = (d.rsi < config.RSI_RANGE_BUY_MAX and
+                   d.price < d.bb_lower and d.price > d.ema200)
+        tech_reason = f"RSI={d.rsi:.1f} BB={d.bb_lower:.0f}"
+    else:
+        tech_ok = (d.rsi > config.RSI_TREND_BUY_MIN and
+                   d.ema20 > d.ema50 > d.ema200 and d.macd_cross_up)
+        tech_reason = f"RSI={d.rsi:.1f} MACD={'cross' if d.macd_cross_up else 'no cross'}"
+
+    vol_ok      = d.vol_ratio >= config.VOLUME_SPIKE_MIN
+    mtf_ok      = d.ema20_4h > d.ema50_4h
+    risk_ok     = d.drawdown_pct < config.MAX_DRAWDOWN_KILL_SWITCH * 100
+
+    signal_ok   = tech_ok and vol_ok and mtf_ok
+    tbl.add_row("Technical",  _check(signal_ok), tech_reason)
+    tbl.add_row("Volume",     _check(vol_ok),    f"{d.vol_ratio:.2f}x (need {config.VOLUME_SPIKE_MIN}x)")
+    tbl.add_row("4h MTF",     _check(mtf_ok),    "aligned" if mtf_ok else "opposed")
+    tbl.add_row("Risk",       _check(risk_ok),   f"DD={d.drawdown_pct:.1f}%")
+    tbl.add_row("ML Filter",  Text("⚪ bypass", style="dim"), "training (<200 trades)")
+
+    if signal_ok and risk_ok:
+        tbl.add_row("", Text(""), Text(""))
+        tbl.add_row("STATUS", Text("🔥 SIGNAL POSSIBLE", style="bold bright_red"), "")
+    else:
+        tbl.add_row("", Text(""), Text(""))
+        tbl.add_row("STATUS", Text("⏳ WAITING", style="dim"), "")
+
+    return Panel(tbl, title="[bold]AGENTS", border_style="green", box=box.ROUNDED)
+
+
+def _trades_panel(d: DashboardData) -> Panel:
+    if not d.recent_trades:
+        return Panel(
+            Align.center(Text("No trades yet", style="dim"), vertical="middle"),
+            title="[bold]RECENT TRADES", border_style="magenta", box=box.ROUNDED
+        )
+
+    tbl = Table(box=box.SIMPLE, show_header=True, header_style="dim")
+    tbl.add_column("Time",   style="dim", width=12)
+    tbl.add_column("Side",   width=5)
+    tbl.add_column("Entry",  width=10)
+    tbl.add_column("Exit",   width=10)
+    tbl.add_column("PnL",    width=10)
+
+    for tr in d.recent_trades:
+        pnl   = float(tr.get("pnl_usdt", 0))
+        color = "green" if pnl >= 0 else "red"
+        ts    = str(tr.get("timestamp", ""))[:10]
+        tbl.add_row(
+            ts,
+            str(tr.get("signal", ""))[:4],
+            f"${float(tr.get('entry_price', 0)):,.0f}",
+            f"${float(tr.get('exit_price',  0)):,.0f}",
+            Text(f"${pnl:+.4f}", style=color),
+        )
+
+    return Panel(tbl, title="[bold]RECENT TRADES", border_style="magenta", box=box.ROUNDED)
+
+
+def _system_panel(d: DashboardData) -> Text:
+    uptime_s = int(time.monotonic() - _start_time)
+    h, r     = divmod(uptime_s, 3600)
+    m, s     = divmod(r, 60)
+
+    cpu_color = "red" if d.cpu_pct > 80 else "green"
+    ram_pct   = d.ram_used_mb / d.ram_total_mb * 100 if d.ram_total_mb else 0
+    ram_color = "red" if ram_pct > 85 else "green"
+
+    t = Text()
+    t.append(f"  CPU: ", style="dim")
+    t.append(f"{d.cpu_pct:.0f}%", style=cpu_color)
+    t.append(f"  │  RAM: ", style="dim")
+    t.append(f"{d.ram_used_mb:.0f}/{d.ram_total_mb:.0f} MB", style=ram_color)
+    t.append(f"  │  Dashboard up: {h:02d}:{m:02d}:{s:02d}", style="dim")
+    t.append(f"  │  Updated: {d.last_updated}", style="dim")
+    t.append(f"  │  Refresh: {REFRESH_SECONDS}s", style="dim")
+    return t
+
+
+# ─── Layout builder ───────────────────────────────────────────────────────────
+
+def build_layout(d: DashboardData) -> Layout:
+    layout = Layout()
+
+    layout.split_column(
+        Layout(name="header", size=3),
+        Layout(name="body"),
+        Layout(name="footer", size=3),
+    )
+    layout["body"].split_row(
+        Layout(name="left"),
+        Layout(name="right"),
+    )
+    layout["left"].split_column(
+        Layout(name="account", ratio=1),
+        Layout(name="trades",  ratio=1),
+    )
+    layout["right"].split_column(
+        Layout(name="heat",   ratio=3),
+        Layout(name="agents", ratio=2),
+    )
+
+    layout["header"].update(Panel(_header(d), box=box.HEAVY, style="on dark_blue"))
+    layout["account"].update(_account_panel(d))
+    layout["trades"].update(_trades_panel(d))
+    layout["heat"].update(_heat_panel(d))
+    layout["agents"].update(_agents_panel(d))
+    layout["footer"].update(Panel(_system_panel(d), box=box.ROUNDED, style="dim"))
+
+    return layout
+
+
+# ─── Entry point ──────────────────────────────────────────────────────────────
+
+def main():
+    console.clear()
+    console.print("[bold cyan]Loading dashboard...[/]")
+    d = fetch_data()
+
+    with Live(build_layout(d), console=console, refresh_per_second=2,
+              screen=True) as live:
+        while True:
+            time.sleep(REFRESH_SECONDS)
+            d = fetch_data()
+            live.update(build_layout(d))
+
+
+if __name__ == "__main__":
+    main()
+</file>
+
+<file path="pulse.py">
+"""
+pulse.py — Local heartbeat monitor. Run on your Mac, not on Oracle.
+
+Pings the Oracle server every 10 minutes.
+If the server stops responding, plays an alert sound 3 times.
+
+Usage:
+    python pulse.py
+    python pulse.py --ip 64.181.218.172 --interval 10
+"""
+from __future__ import annotations
+
+import argparse
+import datetime
+import subprocess
+import sys
+import time
+
+ORACLE_IP = "64.181.218.172"
+ALERT_SOUND = "/System/Library/Sounds/Basso.aiff"  # built-in macOS alert sound
+
+
+def ping(ip: str) -> bool:
+    result = subprocess.run(
+        ["ping", "-c", "1", "-W", "3", ip],
+        capture_output=True,
+    )
+    return result.returncode == 0
+
+
+def beep(times: int = 3):
+    if sys.platform != "darwin":
+        print("[Pulse] WARNING: audio alert skipped — afplay is macOS-only")
+        return
+    for _ in range(times):
+        subprocess.run(["afplay", ALERT_SOUND])
+        time.sleep(0.6)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--ip",       default=ORACLE_IP, help="Oracle server IP")
+    parser.add_argument("--interval", type=int, default=10, help="Check interval in minutes")
+    args = parser.parse_args()
+
+    interval_s = args.interval * 60
+    print(f"[Pulse] Monitoring {args.ip} every {args.interval} min  — Ctrl+C to stop\n")
+
+    consecutive_failures = 0
+
+    while True:
+        now   = datetime.datetime.now().strftime("%H:%M:%S")
+        alive = ping(args.ip)
+
+        if alive:
+            consecutive_failures = 0
+            print(f"[{now}]  ✅  {args.ip} — alive")
+        else:
+            consecutive_failures += 1
+            print(f"[{now}]  ❌  {args.ip} — NO RESPONSE  (failure #{consecutive_failures})")
+            beep(3)
+
+        time.sleep(interval_s)
+
+
+if __name__ == "__main__":
+    main()
 </file>
 
 <file path="risk.py">
@@ -151,7 +761,15 @@ class RiskEngine:
             size = config.MIN_ORDER_USDT
         else:
             size = max(risk_based, config.MIN_ORDER_USDT)
-        return round(min(size, self.current_balance * 0.95), 2)  # never >95% of balance
+        size = round(min(size, self.current_balance * 0.95), 2)
+        pct_of_balance = size / self.current_balance if self.current_balance > 0 else 0
+        if pct_of_balance > 0.15:
+            logger.warning(
+                f"Position size ${size:.2f} is {pct_of_balance:.0%} of balance "
+                f"${self.current_balance:.2f} — Binance minimum forces outsized risk "
+                f"(target was {config.MAX_RISK_PER_TRADE:.1%})"
+            )
+        return size
 
     # ─── Trade result recording ───────────────────────────────────────────────
 
@@ -277,7 +895,15 @@ class RegimeDetector:
             last_plus_di  = plus_di.iloc[-1]
             last_minus_di = minus_di.iloc[-1]
 
-            regime = "trending" if last_adx > self.threshold else "ranging"
+            # Require 3 consecutive bars above/below threshold before flipping
+            # regime — prevents whipsawing when ADX hovers near the boundary.
+            recent_adx = adx.iloc[-3:]
+            if all(a > self.threshold for a in recent_adx):
+                regime = "trending"
+            elif all(a <= self.threshold for a in recent_adx):
+                regime = "ranging"
+            else:
+                regime = "ranging"  # transitioning — stay conservative
 
             if regime == "trending":
                 direction = "up" if last_plus_di > last_minus_di else "down"
@@ -425,7 +1051,7 @@ logger = logging.getLogger("optimize")
 BEST_PARAMS_PATH = Path("ops/best_params.json")
 
 
-def run_optimization(n_trials: int = 100, metric: str = "sharpe") -> dict | None:
+def run_optimization(n_trials: int = 100, metric: str = "sharpe", days: int = 730) -> dict | None:
     try:
         import optuna
         optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -435,22 +1061,21 @@ def run_optimization(n_trials: int = 100, metric: str = "sharpe") -> dict | None
 
     from backtest import WalkForwardBacktester
 
-    print("Fetching historical data (this may take ~30s)...")
+    print(f"Fetching {days} days of historical data (this may take ~90s)...")
     bt = WalkForwardBacktester()
-    df = bt.fetch_historical(days=400)
-    print(f"Fetched {len(df)} candles. Starting {n_trials}-trial search...\n")
+    df    = bt.fetch_historical(days=days, timeframe="1h")
+    df_4h = bt.fetch_historical(days=days, timeframe="4h")
+    print(f"Fetched {len(df)} 1h candles, {len(df_4h)} 4h candles. Starting {n_trials}-trial search...\n")
 
     def objective(trial: "optuna.Trial") -> float:  # type: ignore[name-defined]
         # ── Override config module attributes for this trial ──────────────────
         # (Python modules are singletons — all code in the same process sees this)
         config.RSI_TREND_BUY_MIN   = trial.suggest_float("rsi_trend_buy_min",  50.0, 65.0)
-        config.RSI_TREND_SELL_MAX  = trial.suggest_float("rsi_trend_sell_max", 35.0, 50.0)
         config.RSI_RANGE_BUY_MAX   = trial.suggest_float("rsi_range_buy_max",  22.0, 38.0)
-        config.RSI_RANGE_SELL_MIN  = trial.suggest_float("rsi_range_sell_min", 62.0, 78.0)
         config.ADX_TREND_THRESHOLD = trial.suggest_float("adx_threshold",      18.0, 35.0)
         config.ATR_STOP_MULT       = trial.suggest_float("atr_stop_mult",       1.0,  2.5)
         config.ATR_TARGET_MULT     = trial.suggest_float("atr_target_mult",     1.5,  4.5)
-        config.VOLUME_SPIKE_MIN    = trial.suggest_float("volume_spike_min",    1.0,  2.0)
+        config.VOLUME_SPIKE_MIN    = trial.suggest_float("volume_spike_min",    1.0,  3.0)
 
         # Re-instantiate classes that read config at construction time
         from agents import TechnicalAgent
@@ -459,7 +1084,7 @@ def run_optimization(n_trials: int = 100, metric: str = "sharpe") -> dict | None
         bt.regime_det = RegimeDetector()
         bt.strategy   = TradingStrategy()
 
-        result = bt.run(df)
+        result = bt.run(df, df_4h=df_4h)
 
         # Require at least 20 trades — fewer means the optimizer is cherry-picking
         # a handful of lucky trades, which inflates Sharpe artificially
@@ -475,6 +1100,8 @@ def run_optimization(n_trials: int = 100, metric: str = "sharpe") -> dict | None
         return result.sharpe_ratio
 
     study = optuna.create_study(direction="maximize")
+    # WARNING: do not pass n_jobs > 1 here — the objective mutates config module
+    # attributes (shared singleton), which causes data races under parallelism.
     study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
 
     best   = study.best_params
@@ -490,9 +1117,7 @@ def run_optimization(n_trials: int = 100, metric: str = "sharpe") -> dict | None
     print()
     env_lines = [
         f"RSI_TREND_BUY_MIN={best['rsi_trend_buy_min']:.1f}",
-        f"RSI_TREND_SELL_MAX={best['rsi_trend_sell_max']:.1f}",
         f"RSI_RANGE_BUY_MAX={best['rsi_range_buy_max']:.1f}",
-        f"RSI_RANGE_SELL_MIN={best['rsi_range_sell_min']:.1f}",
         f"ADX_TREND_THRESHOLD={best['adx_threshold']:.1f}",
         f"ATR_STOP_MULT={best['atr_stop_mult']:.2f}",
         f"ATR_TARGET_MULT={best['atr_target_mult']:.2f}",
@@ -529,8 +1154,12 @@ def main():
         default="sharpe",
         help="Objective to maximise (default: sharpe)",
     )
+    parser.add_argument(
+        "--days", type=int, default=730,
+        help="Days of historical data to fetch (default: 730 = ~2 years)",
+    )
     args = parser.parse_args()
-    run_optimization(args.trials, args.metric)
+    run_optimization(args.trials, args.metric, args.days)
 
 
 if __name__ == "__main__":
@@ -631,18 +1260,25 @@ class WalkForwardBacktester:
 
     # ─── Public API ──────────────────────────────────────────────────────────
 
-    def run(self, df: pd.DataFrame) -> BacktestResult:
-        """Run walk-forward test on a DataFrame of OHLCV data."""
+    def run(self, df: pd.DataFrame, df_4h: pd.DataFrame | None = None) -> BacktestResult:
+        """Run walk-forward test on a DataFrame of OHLCV data.
+
+        df_4h: optional 4h OHLCV covering the same date range as df. When
+               provided, each simulated bar passes the aligned 4h window to
+               TechnicalAgent for multi-timeframe confirmation — matching live
+               bot behaviour exactly.
+        """
         logger.info(
             f"Walk-forward backtest: {len(df)} bars, "
             f"IS={self.in_sample} OS={self.out_sample} step={self.step}"
+            + (f", 4h bars={len(df_4h)}" if df_4h is not None else ", no 4h data")
         )
 
         all_trades:  list[Trade] = []
         fold_results: list[dict] = []
 
         for fold_idx, (train_df, test_df) in enumerate(self._folds(df)):
-            fold_trades = self._simulate_fold(train_df, test_df)
+            fold_trades = self._simulate_fold(train_df, test_df, df_4h)
             fold_stats  = self._fold_stats(fold_trades)
             fold_stats["fold"] = fold_idx + 1
             fold_results.append(fold_stats)
@@ -700,7 +1336,7 @@ class WalkForwardBacktester:
             yield train_df, test_df
             start += self.step
 
-    def _simulate_fold(self, train_df: pd.DataFrame, test_df: pd.DataFrame) -> list[Trade]:
+    def _simulate_fold(self, train_df: pd.DataFrame, test_df: pd.DataFrame, df_4h: pd.DataFrame | None = None) -> list[Trade]:
         """
         Simulate bar-by-bar trading on the out-of-sample (test) window.
         Uses the tail of train_df as indicator lookback context so the
@@ -729,7 +1365,11 @@ class WalkForwardBacktester:
             close  = row["close"]
 
             if in_trade:
-                # Check exit conditions
+                # Regime-flip exit: close at bar close if market has shifted
+                current_regime = self.regime_det.detect(window)["regime"]
+                regime_flipped = current_regime != entry_regime
+
+                # Check SL/TP exit conditions
                 if entry_signal == "BUY":
                     hit_stop   = row["low"]   <= stop_loss
                     hit_target = row["high"]  >= take_profit
@@ -739,8 +1379,11 @@ class WalkForwardBacktester:
                 else:
                     hit_stop = hit_target = False
 
-                if hit_stop or hit_target:
-                    exit_price = take_profit if hit_target else stop_loss
+                if hit_stop or hit_target or regime_flipped:
+                    if regime_flipped and not hit_stop and not hit_target:
+                        exit_price = close  # exit at bar close on regime flip
+                    else:
+                        exit_price = stop_loss if hit_stop else take_profit
                     sign       = 1 if entry_signal == "BUY" else -1
                     gross_pnl  = sign * (exit_price - entry_price) / entry_price * size_usdt
                     fee        = size_usdt * self.BINANCE_FEE * 2  # entry + exit
@@ -768,9 +1411,18 @@ class WalkForwardBacktester:
                 # Look for entry signal
                 regime_info = self.regime_det.detect(window)
                 regime      = regime_info["regime"]
-                tech_signal = self.technical.analyse(window, regime)
 
-                if tech_signal.signal in ("BUY", "SELL") and tech_signal.confidence >= 0.4:
+                # Align 4h data to current bar's timestamp
+                window_4h = None
+                if df_4h is not None:
+                    ts = context.index[i]
+                    _slice = df_4h.loc[:ts].iloc[-100:]
+                    if len(_slice) >= 50:
+                        window_4h = _slice
+
+                tech_signal = self.technical.analyse(window, regime, df_4h=window_4h)
+
+                if tech_signal.signal in ("BUY", "SELL") and tech_signal.confidence >= 0.6:
                     levels = self.strategy.compute_levels(window, tech_signal.signal, regime)
                     if not levels:
                         continue
@@ -835,9 +1487,13 @@ class WalkForwardBacktester:
         drawdown = (peak - equity) / (peak + self.capital)
         max_dd   = float(drawdown.max()) * 100
 
-        daily_returns = pd.Series(pnls)
-        sharpe = (daily_returns.mean() / daily_returns.std() * np.sqrt(252)
-                  if daily_returns.std() > 0 else 0)
+        returns = pd.Series([t.pnl_usdt / t.size_usdt for t in trades])
+        if len(trades) >= 2 and returns.std() > 0:
+            total_days = (trades[-1].exit_time - trades[0].entry_time).total_seconds() / 86400
+            trades_per_year = len(trades) / max(total_days, 1) * 365
+            sharpe = returns.mean() / returns.std() * np.sqrt(trades_per_year)
+        else:
+            sharpe = 0.0
 
         return {
             "total_return_pct":  round(total_return, 2),
@@ -861,9 +1517,13 @@ class WalkForwardBacktester:
         peak    = np.maximum.accumulate(equity)
         dd_pct  = ((peak - equity) / peak * 100).max()
 
-        daily   = pd.Series(pnls)
-        sharpe  = (daily.mean() / daily.std() * np.sqrt(252)
-                   if daily.std() > 0 else 0)
+        returns = pd.Series([t.pnl_usdt / t.size_usdt for t in trades])
+        if len(trades) >= 2 and returns.std() > 0:
+            total_days = (trades[-1].exit_time - trades[0].entry_time).total_seconds() / 86400
+            trades_per_year = len(trades) / max(total_days, 1) * 365
+            sharpe = returns.mean() / returns.std() * np.sqrt(trades_per_year)
+        else:
+            sharpe = 0.0
 
         profit_factor = (sum(wins) / abs(sum(losses))
                          if losses else float("inf"))
@@ -952,11 +1612,1539 @@ class WalkForwardBacktester:
                 continue
             features_list.append(t.features)
             outcomes.append(1 if t.pnl_usdt > 0 else 0)
+        win_rate_str = f"{sum(outcomes)/len(outcomes):.1%}" if outcomes else "n/a"
         logger.info(
             f"Extracted {len(features_list)} labelled trades for ML training "
-            f"(win_rate={sum(outcomes)/len(outcomes):.1%} if outcomes else 'n/a')"
+            f"(win_rate={win_rate_str})"
         )
         return features_list, outcomes
+</file>
+
+<file path="flask_dashboard.py">
+"""
+flask_dashboard.py — Browser-based dashboard for Crypto Survival System.
+
+Run alongside bot.py in a separate tmux window:
+    python flask_dashboard.py
+
+Then open in your browser: http://<oracle-ip>:5000
+(Oracle: open port 5000 in VCN security list + sudo firewall-cmd --add-port=5000/tcp --permanent)
+"""
+from __future__ import annotations
+
+import sqlite3
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import ccxt
+import pandas as pd
+import psutil
+from flask import Flask, jsonify
+
+import config
+from strategy import RegimeDetector
+
+app = Flask(__name__)
+_start_time = time.monotonic()
+_cache: dict = {}
+_cache_ts: float = 0.0
+CACHE_TTL = 25  # seconds — refresh faster than the 30s JS poll
+
+
+# ─── Exchange ─────────────────────────────────────────────────────────────────
+
+def _build_exchange():
+    if config.EXCHANGE == "kucoin":
+        return ccxt.kucoin({"enableRateLimit": True})
+    return ccxt.binance({"enableRateLimit": True})
+
+
+# ─── Indicators ───────────────────────────────────────────────────────────────
+
+def _rsi(series: pd.Series, period: int = 14) -> float:
+    delta = series.diff()
+    gain  = delta.clip(lower=0).rolling(period).mean()
+    loss  = (-delta.clip(upper=0)).rolling(period).mean()
+    rs    = gain / loss.replace(0, 1e-10)
+    return float((100 - (100 / (1 + rs))).iloc[-1])
+
+
+def _bollinger(series: pd.Series, period: int = 20, std_dev: int = 2):
+    mid = series.rolling(period).mean()
+    std = series.rolling(period).std()
+    return float((mid + std_dev * std).iloc[-1]), float((mid - std_dev * std).iloc[-1])
+
+
+# ─── Data fetcher ─────────────────────────────────────────────────────────────
+
+def fetch_data() -> dict[str, Any]:
+    global _cache, _cache_ts
+    if time.monotonic() - _cache_ts < CACHE_TTL and _cache:
+        return _cache
+
+    d: dict[str, Any] = {
+        "price": 0, "price_change": 0, "regime": "unknown", "adx": 0,
+        "rsi": 0, "macd_hist": 0, "macd_cross_up": False,
+        "ema20": 0, "ema50": 0, "ema200": 0,
+        "bb_lower": 0, "bb_upper": 0, "vol_ratio": 0,
+        "plus_di": 0, "minus_di": 0,
+        "ema20_4h": 0, "ema50_4h": 0,
+        "rsi_threshold": config.RSI_TREND_BUY_MIN,
+        "adx_threshold": config.ADX_TREND_THRESHOLD,
+        "vol_threshold": config.VOLUME_SPIKE_MIN,
+        "drawdown_threshold": config.MAX_DRAWDOWN_KILL_SWITCH * 100,
+        "balance": config.STARTING_CAPITAL, "peak": config.STARTING_CAPITAL,
+        "drawdown_pct": 0, "daily_pnl": 0,
+        "trades_today": 0, "total_trades": 0,
+        "win_trades": 0, "loss_trades": 0,
+        "win_rate": 0, "profit_factor": 0,
+        "best_trade": 0, "worst_trade": 0,
+        "recent_trades": [],
+        "price_history": [],
+        "bid_depth_usdt": 0, "ask_depth_usdt": 0,
+        "price_impact_pct": 0, "depth_ok": True,
+        "cpu_pct": 0, "ram_used_mb": 0, "ram_total_mb": 0,
+        "last_updated": "—", "uptime": "00:00:00", "error": "",
+    }
+
+    try:
+        exchange = _build_exchange()
+        symbol   = config.TRADING_PAIR
+
+        # ── 1h OHLCV ──────────────────────────────────────────────────────────
+        ohlcv = exchange.fetch_ohlcv(symbol, "1h", limit=300)
+        df    = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","volume"])
+        close = df["close"]
+
+        d["price"]        = float(close.iloc[-1])
+        d["price_change"] = (d["price"] - float(close.iloc[-25])) / float(close.iloc[-25]) * 100
+        d["price_history"] = [round(float(x), 2) for x in close.tail(48).tolist()]
+
+        # Indicators
+        d["rsi"] = _rsi(close)
+
+        ema_fast  = close.ewm(span=12, adjust=False).mean()
+        ema_slow  = close.ewm(span=26, adjust=False).mean()
+        macd_line = ema_fast - ema_slow
+        sig_line  = macd_line.ewm(span=9, adjust=False).mean()
+        d["macd_hist"]    = float((macd_line - sig_line).iloc[-1])
+        d["macd_cross_up"] = bool(
+            macd_line.iloc[-1] > sig_line.iloc[-1] and
+            macd_line.iloc[-2] <= sig_line.iloc[-2]
+        )
+        d["ema20"]  = float(close.ewm(span=20,  adjust=False).mean().iloc[-1])
+        d["ema50"]  = float(close.ewm(span=50,  adjust=False).mean().iloc[-1])
+        d["ema200"] = float(close.ewm(span=200, adjust=False).mean().iloc[-1])
+        d["bb_upper"], d["bb_lower"] = _bollinger(close)
+
+        vol_avg      = float(df["volume"].rolling(50).mean().iloc[-1])
+        d["vol_ratio"] = float(df["volume"].iloc[-1]) / vol_avg if vol_avg > 0 else 0.0
+
+        ri            = RegimeDetector().detect(df)
+        d["regime"]   = ri["regime"]
+        d["adx"]      = ri["adx"]
+        d["plus_di"]  = ri["plus_di"]
+        d["minus_di"] = ri["minus_di"]
+
+        d["rsi_threshold"] = (
+            config.RSI_RANGE_BUY_MAX if d["regime"] == "ranging"
+            else config.RSI_TREND_BUY_MIN
+        )
+
+        # ── 4h OHLCV ──────────────────────────────────────────────────────────
+        ohlcv_4h = exchange.fetch_ohlcv(symbol, "4h", limit=100)
+        df4      = pd.DataFrame(ohlcv_4h, columns=["ts","open","high","low","close","volume"])
+        c4       = df4["close"]
+        d["ema20_4h"] = float(c4.ewm(span=20, adjust=False).mean().iloc[-1])
+        d["ema50_4h"] = float(c4.ewm(span=50, adjust=False).mean().iloc[-1])
+
+        # ── Order book depth (KuCoin CEX, not KCC chain) ──────────────────────
+        try:
+            ob    = exchange.fetch_order_book(symbol, limit=20)
+            price = d["price"]
+            rng   = 0.001  # ±0.1% of mid price
+            bid_depth = sum(qty * pr for pr, qty in ob["bids"] if pr >= price * (1 - rng))
+            ask_depth = sum(qty * pr for pr, qty in ob["asks"] if pr <= price * (1 + rng))
+            d["bid_depth_usdt"] = int(bid_depth)
+            d["ask_depth_usdt"] = int(ask_depth)
+            trade_size = float(getattr(config, "MIN_ORDER_USDT", 11.0))
+            impact = (trade_size / bid_depth * 100) if bid_depth > 0 else 0.0
+            d["price_impact_pct"] = round(impact, 5)
+            d["depth_ok"] = impact < 0.05
+        except Exception:
+            pass  # order book is optional — don't crash the whole dashboard
+
+        # ── Database ──────────────────────────────────────────────────────────
+        if Path(config.DB_PATH).exists():
+            conn      = sqlite3.connect(config.DB_PATH)
+            all_pnl   = pd.read_sql("SELECT pnl_usdt FROM trades ORDER BY id ASC", conn)
+            total_count = pd.read_sql("SELECT COUNT(*) as cnt FROM trades", conn)
+            trades    = pd.read_sql("SELECT * FROM trades ORDER BY id DESC LIMIT 100", conn)
+            conn.close()
+
+            if not all_pnl.empty:
+                equity             = config.STARTING_CAPITAL + all_pnl["pnl_usdt"].cumsum()
+                d["balance"]       = float(equity.iloc[-1])
+                d["peak"]          = float(equity.expanding().max().iloc[-1])
+                d["drawdown_pct"]  = max(0.0, (d["peak"] - d["balance"]) / d["peak"] * 100)
+                d["total_trades"]  = int(total_count["cnt"].iloc[0])
+
+            if not trades.empty:
+                d["recent_trades"] = trades.head(10).to_dict("records")
+                today   = datetime.now(timezone.utc).date().isoformat()
+                today_t = trades[trades["timestamp"].str.startswith(today)]
+                d["trades_today"] = len(today_t)
+                d["daily_pnl"]    = float(today_t["pnl_usdt"].sum()) if not today_t.empty else 0.0
+
+                wins   = trades[trades["pnl_usdt"] > 0]
+                losses = trades[trades["pnl_usdt"] < 0]
+                d["win_trades"]  = len(wins)
+                d["loss_trades"] = len(losses)
+                d["win_rate"]    = round(len(wins) / len(trades) * 100, 1)
+                gross_win  = float(wins["pnl_usdt"].sum())   if not wins.empty   else 0.0
+                gross_loss = abs(float(losses["pnl_usdt"].sum())) if not losses.empty else 0.0
+                d["profit_factor"] = round(gross_win / gross_loss, 2) if gross_loss > 0 else 0.0
+                d["best_trade"]  = round(float(trades["pnl_usdt"].max()), 4)
+                d["worst_trade"] = round(float(trades["pnl_usdt"].min()), 4)
+
+        # ── System ────────────────────────────────────────────────────────────
+        d["cpu_pct"]    = psutil.cpu_percent(interval=0.1)
+        mem = psutil.virtual_memory()
+        d["ram_used_mb"]  = int(mem.used  / 1024 / 1024)
+        d["ram_total_mb"] = int(mem.total / 1024 / 1024)
+
+        uptime_s = int(time.monotonic() - _start_time)
+        h, r = divmod(uptime_s, 3600)
+        m, s = divmod(r, 60)
+        d["uptime"]       = f"{h:02d}:{m:02d}:{s:02d}"
+        d["last_updated"] = datetime.now().strftime("%H:%M:%S")
+
+    except Exception as e:
+        d["error"] = str(e)[:150]
+
+    _cache    = d
+    _cache_ts = time.monotonic()
+    return d
+
+
+# ─── HTML (served statically — no Jinja2 rendering, JS handles all data) ─────
+
+HTML = """<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crypto Survival System</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+  body { background:#0d1117; color:#e6edf3; font-family:'Segoe UI',system-ui,sans-serif; }
+  .card { background:#161b22; border:1px solid #30363d; }
+  .card-header { background:#21262d; border-bottom:1px solid #30363d; font-size:.85rem; letter-spacing:.05em; }
+  .price-big { font-size:2.2rem; font-weight:700; letter-spacing:-1px; }
+  .g-pos { color:#3fb950; } .g-neg { color:#f85149; } .g-dim { color:#8b949e; }
+  .progress { height:8px; background:#21262d; border-radius:4px; }
+  .stat-label { color:#8b949e; font-size:.75rem; margin-bottom:1px; }
+  .stat-value { font-weight:600; font-size:.92rem; }
+  .orb { width:76px; height:76px; border-radius:50%; display:flex; align-items:center;
+         justify-content:center; font-size:1.4rem; font-weight:700; margin:0 auto; }
+  .orb-go   { background:#1a4a2a; border:3px solid #3fb950; color:#3fb950; box-shadow:0 0 18px #3fb95055; }
+  .orb-part { background:#3a2a0a; border:3px solid #e3b341; color:#e3b341; box-shadow:0 0 18px #e3b34155; }
+  .orb-wait { background:#1a1a2a; border:3px solid #30363d; color:#8b949e; }
+  .pulse-dot { display:inline-block; width:8px; height:8px; border-radius:50%;
+               background:#3fb950; animation:pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.25} }
+  .heat-label { font-size:.72rem; color:#8b949e; }
+  .heat-value { font-size:.72rem; font-weight:600; }
+  .footer-bar { background:#161b22; border-top:1px solid #30363d; padding:6px 16px;
+                font-size:.72rem; color:#8b949e; }
+  table.table-trades td { font-size:.75rem; vertical-align:middle; padding:.3rem .5rem; }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="d-flex flex-wrap align-items-center px-4 py-2 gap-3"
+     style="background:#161b22;border-bottom:1px solid #30363d;min-height:54px">
+  <span style="font-weight:700;color:#58a6ff;font-size:.9rem">⬡ CRYPTO SURVIVAL</span>
+  <span class="price-big" id="price">$—</span>
+  <span class="fs-5" id="price-change">—</span>
+  <span id="regime-badge">—</span>
+  <span class="g-dim" id="adx-val" style="font-size:.8rem">ADX —</span>
+  <span class="ms-auto d-flex align-items-center gap-2">
+    <span class="pulse-dot" id="pulse-dot"></span>
+    <span class="g-dim" id="last-updated" style="font-size:.78rem">—</span>
+    <span class="g-dim" id="countdown" style="font-size:.78rem"></span>
+  </span>
+  <span class="text-danger" id="error-msg" style="font-size:.75rem"></span>
+</div>
+
+<div class="container-fluid p-3">
+<div class="row g-3">
+
+  <!-- COL A: Signal Orb + Account -->
+  <div class="col-md-3">
+    <div class="card mb-3">
+      <div class="card-header fw-bold">SIGNAL STATUS</div>
+      <div class="card-body text-center py-3">
+        <div class="orb orb-wait mb-2" id="signal-orb">⏳</div>
+        <div id="signal-text" class="g-dim fw-bold mt-1">WAITING</div>
+        <div class="g-dim mt-1" id="conds-met" style="font-size:.72rem">0 / 4 conditions</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header fw-bold">ACCOUNT</div>
+      <div class="card-body p-3">
+        <div class="row g-2">
+          <div class="col-6"><div class="stat-label">Balance</div><div class="stat-value" id="balance">$—</div></div>
+          <div class="col-6"><div class="stat-label">Peak</div><div class="stat-value" id="peak">$—</div></div>
+          <div class="col-6"><div class="stat-label">Drawdown</div><div class="stat-value" id="drawdown">—</div></div>
+          <div class="col-6"><div class="stat-label">PnL Today</div><div class="stat-value" id="daily-pnl">—</div></div>
+          <div class="col-6"><div class="stat-label">Trades Today</div><div class="stat-value" id="trades-today">—</div></div>
+          <div class="col-6"><div class="stat-label">Total Trades</div><div class="stat-value" id="total-trades">—</div></div>
+          <div class="col-6"><div class="stat-label">Win Rate</div><div class="stat-value" id="win-rate">—</div></div>
+          <div class="col-6"><div class="stat-label">Profit Factor</div><div class="stat-value" id="profit-factor">—</div></div>
+          <div class="col-6"><div class="stat-label">Best Trade</div><div class="stat-value g-pos" id="best-trade">—</div></div>
+          <div class="col-6"><div class="stat-label">Worst Trade</div><div class="stat-value g-neg" id="worst-trade">—</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- COL B: Signal Heat -->
+  <div class="col-md-4">
+    <div class="card" style="height:100%">
+      <div class="card-header fw-bold d-flex justify-content-between align-items-center">
+        <span>SIGNAL HEAT</span>
+        <span class="badge" id="regime-heat-badge" style="font-size:.7rem">—</span>
+      </div>
+      <div class="card-body p-3" id="heat-body"></div>
+    </div>
+  </div>
+
+  <!-- COL C: Agents + Order Book -->
+  <div class="col-md-5">
+    <div class="card mb-3">
+      <div class="card-header fw-bold">AGENT VOTES</div>
+      <div class="card-body p-2">
+        <div class="row g-1" id="agents-body"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header fw-bold d-flex justify-content-between align-items-center">
+        <span>ORDER BOOK DEPTH <small class="g-dim">(±0.1% of mid)</small></span>
+        <span class="badge" id="depth-badge" style="font-size:.7rem">—</span>
+      </div>
+      <div class="card-body p-3">
+        <div class="d-flex justify-content-between mb-1">
+          <small class="g-pos">BIDS</small><small id="bid-val" class="g-pos">—</small>
+        </div>
+        <div class="progress mb-2">
+          <div class="progress-bar bg-success" id="bid-bar" style="width:50%"></div>
+        </div>
+        <div class="d-flex justify-content-between mb-1">
+          <small class="g-neg">ASKS</small><small id="ask-val" class="g-neg">—</small>
+        </div>
+        <div class="progress mb-3">
+          <div class="progress-bar bg-danger" id="ask-bar" style="width:50%"></div>
+        </div>
+        <div class="d-flex justify-content-between">
+          <span class="stat-label">$11 order price impact</span>
+          <span class="fw-bold" id="impact-val">—</span>
+        </div>
+        <div class="d-flex justify-content-between mt-1">
+          <span class="stat-label">Bid / Ask imbalance</span>
+          <span class="g-dim" id="imbalance-val" style="font-size:.78rem">—</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /row -->
+
+<!-- ROW 2: Chart + Trades -->
+<div class="row g-3 mt-0">
+  <div class="col-md-8">
+    <div class="card">
+      <div class="card-header fw-bold">BTC/USDT — 48H PRICE</div>
+      <div class="card-body" style="height:190px;padding:.75rem">
+        <canvas id="priceChart"></canvas>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card" style="height:100%">
+      <div class="card-header fw-bold">RECENT TRADES</div>
+      <div style="max-height:228px;overflow-y:auto">
+        <table class="table table-sm table-dark table-trades mb-0">
+          <thead style="position:sticky;top:0;background:#21262d">
+            <tr><th>Entered</th><th>Side</th><th>Entry</th><th>PnL</th></tr>
+          </thead>
+          <tbody id="trades-body">
+            <tr><td colspan="4" class="text-center g-dim py-3">No trades yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /container -->
+
+<!-- FOOTER -->
+<div class="footer-bar d-flex flex-wrap gap-3">
+  <span>CPU: <b id="cpu">—</b></span>
+  <span>│</span>
+  <span>RAM: <b id="ram">—</b></span>
+  <span>│</span>
+  <span>Dashboard up: <b id="uptime">—</b></span>
+  <span>│</span>
+  <span>Next refresh: <b id="countdown2">30s</b></span>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+// ── Chart ───────────────────────────────────────────────────────────────────
+const chart = new Chart(document.getElementById('priceChart').getContext('2d'), {
+  type: 'line',
+  data: { labels:[], datasets:[{ data:[], borderColor:'#58a6ff',
+    backgroundColor:'rgba(88,166,255,.07)', borderWidth:2, fill:true,
+    tension:.35, pointRadius:0 }]},
+  options: {
+    responsive:true, maintainAspectRatio:false,
+    plugins:{ legend:{display:false}, tooltip:{
+      callbacks:{ label: ctx => '$' + ctx.parsed.y.toLocaleString() }
+    }},
+    scales:{
+      x:{ display:false },
+      y:{ grid:{color:'#21262d'}, ticks:{color:'#8b949e',
+          callback: v => '$' + Math.round(v/1000) + 'k' }}
+    }, animation:{duration:300}
+  }
+});
+
+// ── Countdown ───────────────────────────────────────────────────────────────
+let secsLeft = 30;
+setInterval(() => {
+  secsLeft = Math.max(0, secsLeft - 1);
+  const t = secsLeft + 's';
+  document.getElementById('countdown').textContent  = '⟳ ' + t;
+  document.getElementById('countdown2').textContent = t;
+}, 1000);
+
+// ── DOM helpers ─────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+
+function heatRow(label, pct, valueStr) {
+  pct = Math.max(0, Math.min(100, pct));
+  const c = pct >= 100 ? '#f85149' : pct >= 80 ? '#e3b341' : pct >= 45 ? '#58a6ff' : '#3fb950';
+  return `<div class="mb-3">
+    <div class="d-flex justify-content-between mb-1">
+      <span class="heat-label">${label}</span>
+      <span class="heat-value" style="color:${c}">${valueStr}</span>
+    </div>
+    <div class="progress">
+      <div class="progress-bar" style="width:${pct}%;background:${c}"></div>
+    </div></div>`;
+}
+
+function checkRow(label, ok, detail) {
+  return `<div class="mb-2 d-flex align-items-start gap-2">
+    <span style="font-size:.9rem">${ok ? '✅' : '❌'}</span>
+    <div><div style="font-size:.78rem;font-weight:600">${label}</div>
+    <div style="font-size:.7rem;color:#8b949e">${detail}</div></div></div>`;
+}
+
+function agentCard(ok, label, detail) {
+  const bg = ok ? '#1a4a2a' : '#1a1a2a';
+  const bc = ok ? '#3fb950' : '#30363d';
+  return `<div class="col-6 mb-1">
+    <div class="d-flex align-items-center gap-1 p-1 rounded" style="background:${bg};border:1px solid ${bc}">
+      <span style="font-size:.85rem">${ok ? '✅' : '❌'}</span>
+      <div><div style="font-size:.75rem;font-weight:600">${label}</div>
+      <div style="font-size:.68rem;color:#8b949e">${detail}</div></div>
+    </div></div>`;
+}
+
+// ── Main render ─────────────────────────────────────────────────────────────
+function render(d) {
+  // Price header
+  const up = d.price_change >= 0;
+  $('price').textContent = '$' + d.price.toLocaleString('en', {minimumFractionDigits:2, maximumFractionDigits:2});
+  $('price-change').innerHTML =
+    `<span class="${up?'g-pos':'g-neg'}">${up?'▲':'▼'} ${Math.abs(d.price_change).toFixed(2)}%</span>`;
+  const rc = d.regime === 'trending' ? '#e3b341' : '#58a6ff';
+  $('regime-badge').innerHTML =
+    `<span class="badge" style="background:${rc}22;color:${rc};border:1px solid ${rc}">${d.regime.toUpperCase()}</span>`;
+  $('adx-val').textContent = 'ADX ' + d.adx.toFixed(1);
+  $('last-updated').textContent = 'Updated ' + d.last_updated;
+  $('error-msg').textContent = d.error || '';
+
+  // Heat
+  const isRanging = d.regime === 'ranging';
+  $('regime-heat-badge').textContent  = isRanging ? 'RANGING' : 'TRENDING';
+  $('regime-heat-badge').style.color  = isRanging ? '#58a6ff' : '#e3b341';
+  $('regime-heat-badge').style.background = isRanging ? '#58a6ff22' : '#e3b34122';
+
+  let heat = '';
+  if (isRanging) {
+    const rsiPct = Math.max(0, (50 - d.rsi) / (50 - d.rsi_threshold) * 100);
+    heat += heatRow('RSI → ' + d.rsi_threshold + ' (falling)', rsiPct, d.rsi.toFixed(1));
+    const bbDist = d.price - d.bb_lower;
+    const bbPct  = Math.max(0, 100 - (bbDist / (d.price * 0.025) * 100));
+    heat += heatRow('Price vs BB lower', bbPct, '$' + bbDist.toFixed(0) + ' above');
+    heat += checkRow('Above EMA200', d.price > d.ema200, '$' + (d.price - d.ema200).toFixed(0));
+  } else {
+    const rsiPct = Math.max(0, (d.rsi - 50) / (d.rsi_threshold - 50) * 100);
+    heat += heatRow('RSI → ' + d.rsi_threshold + ' (rising)', rsiPct, d.rsi.toFixed(1));
+    const emaStack = d.ema20 > d.ema50 && d.ema50 > d.ema200;
+    heat += checkRow('EMA stack 20>50>200', emaStack,
+      '20:' + Math.round(d.ema20) + '  50:' + Math.round(d.ema50));
+    heat += checkRow('MACD crossover', d.macd_cross_up,
+      'hist ' + (d.macd_hist >= 0 ? '+' : '') + d.macd_hist.toFixed(1));
+  }
+  const volPct = Math.min(110, d.vol_ratio / d.vol_threshold * 100);
+  heat += heatRow('Volume spike >' + d.vol_threshold + 'x', volPct, d.vol_ratio.toFixed(2) + 'x');
+  const adxPct = Math.min(110, d.adx / d.adx_threshold * 100);
+  heat += heatRow('ADX → ' + d.adx_threshold, adxPct, d.adx.toFixed(1));
+  heat += checkRow('4h Trend (EMA20>50)', d.ema20_4h > d.ema50_4h,
+    d.ema20_4h > d.ema50_4h ? 'Bullish ✔' : 'Bearish ✘');
+  $('heat-body').innerHTML = heat;
+
+  // Agents
+  const volOk   = d.vol_ratio >= d.vol_threshold;
+  const mtfOk   = d.ema20_4h  > d.ema50_4h;
+  const riskOk  = d.drawdown_pct < d.drawdown_threshold;
+  let techOk;
+  if (isRanging) {
+    techOk = d.rsi < d.rsi_threshold && d.price < d.bb_lower && d.price > d.ema200;
+  } else {
+    techOk = d.rsi > d.rsi_threshold && d.ema20 > d.ema50 && d.ema50 > d.ema200 && d.macd_cross_up;
+  }
+  $('agents-body').innerHTML =
+    agentCard(techOk, 'Technical',  isRanging ? 'RSI+BB+EMA200' : 'RSI+EMA+MACD') +
+    agentCard(volOk,  'Volume',     d.vol_ratio.toFixed(2) + 'x (need ' + d.vol_threshold + 'x)') +
+    agentCard(mtfOk,  '4h MTF',    mtfOk ? 'Bullish aligned' : 'Bearish — blocked') +
+    agentCard(riskOk, 'Risk',       'DD=' + d.drawdown_pct.toFixed(1) + '%') +
+    agentCard(false,  'ML Filter',  '⚪ bypass (<200 trades)');
+
+  // Signal orb
+  const met = [techOk, volOk, mtfOk, riskOk].filter(Boolean).length;
+  $('conds-met').textContent = met + ' / 4 conditions met';
+  if (met === 4) {
+    $('signal-orb').className  = 'orb orb-go mb-2';
+    $('signal-orb').textContent = '🔥';
+    $('signal-text').textContent = 'SIGNAL POSSIBLE';
+    $('signal-text').style.color = '#3fb950';
+  } else if (met >= 2) {
+    $('signal-orb').className  = 'orb orb-part mb-2';
+    $('signal-orb').textContent = met + '/4';
+    $('signal-text').textContent = 'WARMING UP';
+    $('signal-text').style.color = '#e3b341';
+  } else {
+    $('signal-orb').className  = 'orb orb-wait mb-2';
+    $('signal-orb').textContent = '⏳';
+    $('signal-text').textContent = 'WAITING';
+    $('signal-text').style.color = '#8b949e';
+  }
+
+  // Account
+  $('balance').textContent     = '$' + d.balance.toFixed(2);
+  $('peak').textContent        = '$' + d.peak.toFixed(2);
+  $('drawdown').innerHTML      = `<span style="color:${d.drawdown_pct>10?'#f85149':'#3fb950'}">${d.drawdown_pct.toFixed(2)}%</span>`;
+  $('daily-pnl').innerHTML     = `<span style="color:${d.daily_pnl>=0?'#3fb950':'#f85149'}">${d.daily_pnl>=0?'+':''}$${Math.abs(d.daily_pnl).toFixed(4)}</span>`;
+  $('trades-today').textContent  = d.trades_today + ' / 2';
+  $('total-trades').textContent  = d.total_trades;
+  $('win-rate').textContent      = d.total_trades > 0 ? d.win_rate + '%' : '—';
+  $('profit-factor').textContent = d.total_trades > 0 ? d.profit_factor : '—';
+  $('best-trade').textContent    = d.total_trades > 0 ? (d.best_trade >= 0 ? '+$' : '-$') + Math.abs(d.best_trade).toFixed(4)  : '—';
+  $('worst-trade').textContent   = d.total_trades > 0 ? (d.worst_trade >= 0 ? '+$' : '-$') + Math.abs(d.worst_trade).toFixed(4) : '—';
+
+  // Order book
+  const tot = d.bid_depth_usdt + d.ask_depth_usdt;
+  const bPct = tot > 0 ? d.bid_depth_usdt / tot * 100 : 50;
+  const aPct = tot > 0 ? d.ask_depth_usdt / tot * 100 : 50;
+  $('bid-bar').style.width = bPct + '%';
+  $('ask-bar').style.width = aPct + '%';
+  $('bid-val').textContent  = tot > 0 ? '$' + d.bid_depth_usdt.toLocaleString() : '—';
+  $('ask-val').textContent  = tot > 0 ? '$' + d.ask_depth_usdt.toLocaleString() : '—';
+  const ic = d.price_impact_pct > 0.05 ? '#f85149' : '#3fb950';
+  $('impact-val').innerHTML = `<span style="color:${ic}">${d.price_impact_pct.toFixed(4)}%</span>`;
+  $('depth-badge').textContent      = d.depth_ok ? '✔ LIQUID' : '⚠ THIN';
+  $('depth-badge').style.color      = d.depth_ok ? '#3fb950' : '#f85149';
+  $('depth-badge').style.background = d.depth_ok ? '#1a4a2a'  : '#4a1a1a';
+  const imb = tot > 0 ? ((d.bid_depth_usdt - d.ask_depth_usdt) / tot * 100).toFixed(1) : '—';
+  $('imbalance-val').textContent = tot > 0 ? (imb > 0 ? '+' : '') + imb + '% bid-heavy' : '—';
+
+  // Chart
+  const hist = d.price_history;
+  chart.data.labels = hist.map((_, i) => (i - hist.length + 1) + 'h');
+  chart.data.datasets[0].data = hist;
+  const trending_up = hist[hist.length-1] >= hist[0];
+  chart.data.datasets[0].borderColor      = trending_up ? '#3fb950' : '#f85149';
+  chart.data.datasets[0].backgroundColor  = trending_up ? 'rgba(63,185,80,.07)' : 'rgba(248,81,73,.07)';
+  chart.update('none');
+
+  // Trades table
+  let tbody = '';
+  if (!d.recent_trades.length) {
+    tbody = '<tr><td colspan="4" class="text-center g-dim py-3">No trades yet</td></tr>';
+  } else {
+    d.recent_trades.forEach(t => {
+      const pnl = parseFloat(t.pnl_usdt || 0);
+      const c = pnl >= 0 ? '#3fb950' : '#f85149';
+      tbody += `<tr>
+        <td>${(t.entered_at||t.timestamp||'').substring(5,10)}</td>
+        <td>${t.signal||''}</td>
+        <td>$${parseFloat(t.entry_price||0).toLocaleString('en',{maximumFractionDigits:0})}</td>
+        <td style="color:${c}">${pnl>=0?'+':''}${pnl.toFixed(4)}</td>
+      </tr>`;
+    });
+  }
+  $('trades-body').innerHTML = tbody;
+
+  // Footer
+  $('cpu').textContent    = d.cpu_pct + '%';
+  $('ram').textContent    = d.ram_used_mb + ' / ' + d.ram_total_mb + ' MB';
+  $('uptime').textContent = d.uptime;
+}
+
+// ── Poll ─────────────────────────────────────────────────────────────────────
+function poll() {
+  fetch('/api/data')
+    .then(r => r.json())
+    .then(d => { render(d); secsLeft = 30; $('pulse-dot').style.background = '#3fb950'; })
+    .catch(e => {
+      $('error-msg').textContent = '⚠ ' + e;
+      $('pulse-dot').style.background = '#f85149';
+    });
+}
+
+poll();
+setInterval(poll, 30000);
+</script>
+</body>
+</html>"""
+
+
+# ─── Routes ───────────────────────────────────────────────────────────────────
+
+@app.route("/")
+def index():
+    return HTML
+
+@app.route("/api/data")
+def api_data():
+    return jsonify(fetch_data())
+
+
+# ─── Entry point ──────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    print("Dashboard running → http://localhost:5000")
+    print("From your browser: http://64.181.218.172:5000  (after opening port in Oracle VCN)")
+    # 0.0.0.0 = reachable from your laptop when running on Oracle
+    app.run(host="0.0.0.0", port=5000, debug=False)
+</file>
+
+<file path="ml_filter.py">
+"""
+ml_filter.py — ML-based signal quality filter.
+
+Trains a logistic regression on historical backtest trade outcomes.
+At inference, filters out signals with low predicted win probability.
+
+Training flow:
+    python bot.py --train-filter   # runs backtest, extracts features, trains model
+
+Inference: loaded automatically by ConsensusEngine when ops/signal_filter.pkl exists.
+If no model is trained yet, filter is transparent (all signals pass through).
+"""
+
+from __future__ import annotations
+
+import logging
+import pickle
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+MODEL_PATH = Path("ops/signal_filter.pkl")
+MIN_TRADES_TO_TRAIN = 20  # minimum historical trades needed
+
+# Feature order must never change once a model is trained
+FEATURE_ORDER = [
+    "rsi",
+    "atr_pct",
+    "macd_hist",
+    "ema20_dist",
+    "ema50_dist",
+    "ema200_dist",
+    "vol_ratio",
+    "adx",
+    "is_buy",
+]
+
+
+def extract_features(df: pd.DataFrame, signal: str) -> dict:
+    """
+    Extract ML features from a window of OHLCV data at entry time.
+    Must be called identically in both backtest (training) and live bot (inference).
+
+    df: window of OHLCV bars ending at the entry candle
+    signal: "BUY" or "SELL"
+    """
+    close = df["close"]
+    high  = df["high"]
+    low   = df["low"]
+
+    # ── RSI(14) ────────────────────────────────────────────────────────────────
+    delta = close.diff()
+    gain  = delta.clip(lower=0).rolling(14).mean()
+    loss  = (-delta.clip(upper=0)).rolling(14).mean()
+    rs    = gain / loss.replace(0, 1e-10)
+    rsi   = float((100 - (100 / (1 + rs))).iloc[-1])
+
+    # ── ATR % of price ────────────────────────────────────────────────────────
+    prev_close = close.shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low  - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    atr     = float(tr.rolling(14).mean().iloc[-1])
+    atr_pct = atr / float(close.iloc[-1])
+
+    # ── MACD histogram ────────────────────────────────────────────────────────
+    ema_fast    = close.ewm(span=12, adjust=False).mean()
+    ema_slow    = close.ewm(span=26, adjust=False).mean()
+    macd_line   = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    macd_hist   = float((macd_line - signal_line).iloc[-1])
+
+    # ── EMA distances (% from price) ──────────────────────────────────────────
+    ema20  = close.ewm(span=20,  adjust=False).mean()
+    ema50  = close.ewm(span=50,  adjust=False).mean()
+    ema200 = close.ewm(span=200, adjust=False).mean()
+    lc = float(close.iloc[-1])
+    ema20_dist  = (lc - float(ema20.iloc[-1]))  / lc
+    ema50_dist  = (lc - float(ema50.iloc[-1]))  / lc
+    ema200_dist = (lc - float(ema200.iloc[-1])) / lc
+
+    # ── Volume ratio (current vs 50-bar avg, matches TechnicalAgent) ─────────
+    vol_avg   = float(df["volume"].rolling(50).mean().iloc[-1])
+    vol_ratio = float(df["volume"].iloc[-1]) / vol_avg if vol_avg > 0 else 1.0
+
+    # ── ADX(14) ───────────────────────────────────────────────────────────────
+    up_move   = high.diff()
+    down_move = -low.diff()
+    plus_dm   = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+    minus_dm  = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+    atr_14    = tr.rolling(14).mean()
+    plus_di   = 100 * (plus_dm.rolling(14).mean() / atr_14.replace(0, 1e-10))
+    minus_di  = 100 * (minus_dm.rolling(14).mean() / atr_14.replace(0, 1e-10))
+    dx        = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, 1e-10)
+    adx       = float(dx.rolling(14).mean().iloc[-1])
+
+    return {
+        "rsi":        rsi,
+        "atr_pct":    atr_pct,
+        "macd_hist":  macd_hist,
+        "ema20_dist": ema20_dist,
+        "ema50_dist": ema50_dist,
+        "ema200_dist": ema200_dist,
+        "vol_ratio":  vol_ratio,
+        "adx":        adx,
+        "is_buy":     1.0 if signal == "BUY" else 0.0,
+    }
+
+
+def features_to_array(features: dict) -> np.ndarray:
+    """Convert a feature dict to a numpy array in the canonical feature order."""
+    return np.array([features[k] for k in FEATURE_ORDER], dtype=float)
+
+
+class SignalFilter:
+    """
+    Logistic regression filter trained on historical backtest trade outcomes.
+
+    - sklearn is only required for training (--train-filter).
+    - Inference uses stored weights/bias — no sklearn dependency at runtime.
+    - When no model exists yet, predict() is a transparent passthrough.
+    """
+
+    THRESHOLD = 0.45  # block only if model is actively confident it's a loss (<45% win prob)
+                      # at 62 training samples CV accuracy is ~45% — effectively disabled
+                      # until 200+ trades accumulate
+
+    def __init__(self):
+        self._model: dict | None = None
+        self._load()
+
+    @property
+    def is_trained(self) -> bool:
+        return self._model is not None
+
+    def _load(self):
+        if MODEL_PATH.exists():
+            try:
+                with open(MODEL_PATH, "rb") as f:
+                    self._model = pickle.load(f)
+                logger.info(
+                    f"ML filter loaded — "
+                    f"n={self._model.get('n_samples', '?')} trades, "
+                    f"base_win_rate={self._model.get('win_rate', 0):.1%}"
+                )
+            except Exception as e:
+                logger.warning(f"ML filter load failed: {e}")
+                self._model = None
+
+    def predict(self, features: dict) -> tuple[bool, float]:
+        """
+        Returns (should_trade, win_probability).
+        If no model trained yet: returns (True, 0.5) — transparent passthrough.
+        On any error: returns (True, 0.5) — fail-open, never blocks trading.
+        """
+        if not self.is_trained:
+            return True, 0.5
+        try:
+            x = features_to_array(features).reshape(1, -1)
+            x_norm = (x - self._model["mean"]) / (self._model["std"] + 1e-10)
+            logit  = float(
+                np.dot(x_norm, self._model["weights"]) + self._model["bias"]
+            )
+            prob = float(1.0 / (1.0 + np.exp(-logit)))
+            return prob >= self.THRESHOLD, round(prob, 3)
+        except Exception as e:
+            logger.warning(f"ML filter predict error: {e}")
+            return True, 0.5
+
+    def train(self, features_list: list[dict], outcomes: list[int]) -> bool:
+        """
+        Train on a list of feature dicts and binary outcomes (1=win, 0=loss).
+        Saves model to ops/signal_filter.pkl. Returns True on success.
+
+        Requires scikit-learn (pip install scikit-learn).
+        """
+        try:
+            from sklearn.linear_model import LogisticRegression
+            from sklearn.preprocessing import StandardScaler
+            from sklearn.model_selection import cross_val_score
+        except ImportError:
+            logger.error("scikit-learn not installed — run: pip install scikit-learn")
+            return False
+
+        n = len(features_list)
+        if n < MIN_TRADES_TO_TRAIN:
+            logger.warning(
+                f"Only {n} trades — need {MIN_TRADES_TO_TRAIN} to train the filter. "
+                f"Run a longer backtest (try --backtest-days 600) first."
+            )
+            return False
+
+        X = np.array([features_to_array(f) for f in features_list])
+        y = np.array(outcomes, dtype=int)
+
+        scaler = StandardScaler()
+        X_sc   = scaler.fit_transform(X)
+
+        # C=0.5 gives mild L2 regularisation — avoids overfitting on small datasets
+        clf = LogisticRegression(C=0.5, max_iter=1000, random_state=42)
+
+        if n >= 30:
+            folds = min(5, n // 6)
+            cv = cross_val_score(clf, X_sc, y, cv=folds, scoring="accuracy")
+            logger.info(
+                f"ML filter cross-val accuracy: {cv.mean():.1%} ± {cv.std():.1%} "
+                f"({folds}-fold)"
+            )
+
+        clf.fit(X_sc, y)
+
+        # Store as pure numpy so inference needs no sklearn
+        model_data = {
+            "mean":      scaler.mean_,
+            "std":       scaler.scale_,
+            "weights":   clf.coef_[0],
+            "bias":      clf.intercept_[0],
+            "n_samples": n,
+            "win_rate":  float(y.mean()),
+        }
+
+        MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(MODEL_PATH, "wb") as f:
+            pickle.dump(model_data, f)
+
+        self._model = model_data
+        logger.info(
+            f"ML filter trained: {n} samples, "
+            f"win_rate={y.mean():.1%} — saved to {MODEL_PATH}"
+        )
+        return True
+</file>
+
+<file path="agents.py">
+"""
+agents.py — The 4-agent consensus decision system.
+
+A trade only executes when ALL agents agree on direction.
+Each agent returns: {"signal": "BUY"|"SELL"|"HOLD", "confidence": 0.0-1.0, "reason": str}
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass
+from typing import Literal
+from datetime import datetime, timezone
+
+import pandas as pd
+import feedparser
+import requests
+
+import config
+
+logger = logging.getLogger(__name__)
+
+Signal = Literal["BUY", "SELL", "HOLD"]
+
+
+@dataclass
+class AgentSignal:
+    agent: str
+    signal: Signal
+    confidence: float   # 0.0 – 1.0
+    reason: str
+
+
+# ─── Technical Agent ──────────────────────────────────────────────────────────
+
+class TechnicalAgent:
+    """
+    Uses RSI, MACD, Bollinger Bands, and Moving Averages.
+    Switches logic based on market regime passed in from strategy.
+    """
+
+    def analyse(
+        self,
+        df: pd.DataFrame,
+        regime: str,
+        df_4h: pd.DataFrame | None = None,
+    ) -> AgentSignal:
+        """
+        df     : 1h OHLCV window (open, high, low, close, volume)
+        regime : "trending" | "ranging"
+        df_4h  : optional 4h OHLCV window for multi-timeframe confirmation.
+                 When provided, BUY signals require 4h EMA20 > EMA50 (medium-term
+                 uptrend) and SELL signals require 4h EMA20 < EMA50.
+        """
+        try:
+            close = df["close"]
+            signals = []
+            reasons = []
+
+            # ── Volume filter ─────────────────────────────────────────────────
+            # 50-bar average gives a stable baseline — a 20-bar window gets
+            # inflated too quickly by a short burst, making spikes impossible to hit
+            vol_avg   = df["volume"].rolling(50).mean().iloc[-1]
+            vol_spike = df["volume"].iloc[-1] > vol_avg * config.VOLUME_SPIKE_MIN
+
+            # ── RSI (14) ──────────────────────────────────────────────────────
+            rsi = self._rsi(close, 14)
+            last_rsi = rsi.iloc[-1]
+
+            # ── MACD ──────────────────────────────────────────────────────────
+            macd_line, signal_line = self._macd(close)
+            hist         = macd_line - signal_line
+            macd_hist    = hist.iloc[-1]
+            macd_hist_1  = hist.iloc[-2]   # previous bar
+            # Crossover within last 5 bars — RSI > threshold and a fresh cross
+            # rarely coincide on the exact same bar; 5-bar window catches entries
+            # that are still early without chasing aged momentum.
+            macd_cross_up   = any(
+                macd_line.iloc[-(k+2)] <= signal_line.iloc[-(k+2)] and
+                macd_line.iloc[-(k+1)] >  signal_line.iloc[-(k+1)]
+                for k in range(5)
+            )
+            macd_cross_down = any(
+                macd_line.iloc[-(k+2)] >= signal_line.iloc[-(k+2)] and
+                macd_line.iloc[-(k+1)] <  signal_line.iloc[-(k+1)]
+                for k in range(5)
+            )
+            # Histogram momentum: histogram must be expanding (gaining strength)
+            hist_expanding_up   = macd_hist > 0 and macd_hist > macd_hist_1
+            hist_expanding_down = macd_hist < 0 and macd_hist < macd_hist_1
+
+            # ── Bollinger Bands (20, 2σ) ──────────────────────────────────────
+            bb_upper, bb_mid, bb_lower = self._bollinger(close, 20, 2)
+            last_close = close.iloc[-1]
+            bb_width = (bb_upper.iloc[-1] - bb_lower.iloc[-1]) / bb_mid.iloc[-1]
+            # Avoid mean-reversion trades when bands are very narrow (low-vol squeeze)
+            bb_wide_enough = bb_width > 0.01  # bands span at least 1% of price
+
+            # ── Moving Averages ───────────────────────────────────────────────
+            ema20  = close.ewm(span=20,  adjust=False).mean()
+            ema50  = close.ewm(span=50,  adjust=False).mean()
+            ema200 = close.ewm(span=200, adjust=False).mean()
+            trend_up   = ema20.iloc[-1] > ema50.iloc[-1] > ema200.iloc[-1]
+            trend_down = ema20.iloc[-1] < ema50.iloc[-1] < ema200.iloc[-1]
+            # EMA slope: short-term trend must be accelerating, not exhausted
+            ema20_slope_up   = ema20.iloc[-1] > ema20.iloc[-3]
+            ema20_slope_down = ema20.iloc[-1] < ema20.iloc[-3]
+            # 200 EMA macro filter: only BUY when price is above long-term trend.
+            # In trending mode this is already guaranteed by trend_up (EMA20>EMA50>EMA200),
+            # but we keep it explicitly for ranging-mode BUY to block bear-market dip catches.
+            above_ema200 = last_close > ema200.iloc[-1]
+
+            if not vol_spike:
+                # Low-volume bar: any signal here is likely a fake-out — skip it
+                return AgentSignal("technical", "HOLD", 0.5,
+                                   f"Low volume (bar={df['volume'].iloc[-1]:.0f} < {vol_avg*config.VOLUME_SPIKE_MIN:.0f}) — skipping")
+
+            if regime == "trending":
+                # Trend-following: all conditions must align including macro trend filter
+                # trend_up = EMA20>EMA50>EMA200, which already implies price > EMA200
+                if (trend_up and macd_cross_up and hist_expanding_up
+                        and last_rsi > config.RSI_TREND_BUY_MIN and ema20_slope_up):
+                    signals.append("BUY")
+                    reasons.append(
+                        f"Trend UP: EMA stack, MACD cross+expanding, vol spike, RSI={last_rsi:.1f}"
+                    )
+                elif (not config.LONG_ONLY and trend_down and macd_cross_down
+                        and hist_expanding_down
+                        and last_rsi < config.RSI_TREND_SELL_MAX and ema20_slope_down):
+                    signals.append("SELL")
+                    reasons.append(
+                        f"Trend DOWN: EMA stack, MACD cross+expanding, RSI={last_rsi:.1f}"
+                    )
+                else:
+                    signals.append("HOLD")
+                    reasons.append(
+                        f"Trend — conditions not met (RSI={last_rsi:.1f}, trend_up={trend_up})"
+                    )
+
+            else:  # ranging / mean reversion
+                # Only buy dips that are above the 200 EMA — not catching falling knives
+                if (bb_wide_enough and last_close <= bb_lower.iloc[-1] * 1.005
+                        and last_rsi < config.RSI_RANGE_BUY_MAX
+                        and above_ema200):
+                    signals.append("BUY")
+                    reasons.append(
+                        f"Mean reversion BUY: below lower BB, above EMA200, RSI={last_rsi:.1f}"
+                    )
+                elif (not config.LONG_ONLY and bb_wide_enough
+                        and last_close >= bb_upper.iloc[-1]
+                        and last_rsi > config.RSI_RANGE_SELL_MIN):
+                    signals.append("SELL")
+                    reasons.append(
+                        f"Mean reversion SELL: above upper BB, RSI={last_rsi:.1f}"
+                    )
+                else:
+                    signals.append("HOLD")
+                    reasons.append(f"No mean-reversion trigger (RSI={last_rsi:.1f})")
+
+            signal = signals[0]
+
+            # ── Multi-timeframe confirmation (4h) ─────────────────────────────
+            # Only apply when 4h data is available and we have a directional view.
+            # Prevents entering 1h trades that fight the medium-term trend.
+            if signal != "HOLD" and df_4h is not None and len(df_4h) >= 50:
+                if not self._check_4h_alignment(df_4h, signal):
+                    return AgentSignal(
+                        "technical", "HOLD", 0.5,
+                        f"4h trend opposes 1h {signal} — skipping"
+                    )
+
+            # Confidence: how many sub-signals agree (each = 0.2 above base 0.4)
+            sub_agrees = sum([
+                (signal == "BUY"  and trend_up)              or (signal == "SELL" and trend_down),
+                (signal == "BUY"  and hist_expanding_up)     or (signal == "SELL" and hist_expanding_down),
+                (signal == "BUY"  and last_rsi > config.RSI_TREND_BUY_MIN) or
+                (signal == "SELL" and last_rsi < config.RSI_TREND_SELL_MAX),
+            ])
+            confidence = 0.4 + 0.2 * sub_agrees if signal != "HOLD" else 0.5
+
+            return AgentSignal("technical", signal, round(confidence, 2), reasons[0])
+
+        except Exception as e:
+            logger.warning(f"TechnicalAgent error: {e}")
+            return AgentSignal("technical", "HOLD", 0.0, f"Error: {e}")
+
+    # ── Indicator helpers (pure pandas, no TA-Lib dependency) ─────────────────
+
+    @staticmethod
+    def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
+        delta = series.diff()
+        gain  = delta.clip(lower=0).rolling(period).mean()
+        loss  = (-delta.clip(upper=0)).rolling(period).mean()
+        rs    = gain / loss.replace(0, 1e-10)
+        return 100 - (100 / (1 + rs))
+
+    @staticmethod
+    def _macd(series: pd.Series, fast=12, slow=26, signal=9):
+        ema_fast   = series.ewm(span=fast,   adjust=False).mean()
+        ema_slow   = series.ewm(span=slow,   adjust=False).mean()
+        macd_line  = ema_fast - ema_slow
+        signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+        return macd_line, signal_line
+
+    @staticmethod
+    def _bollinger(series: pd.Series, period=20, std_dev=2):
+        mid   = series.rolling(period).mean()
+        std   = series.rolling(period).std()
+        upper = mid + std_dev * std
+        lower = mid - std_dev * std
+        return upper, mid, lower
+
+    @staticmethod
+    def _check_4h_alignment(df_4h: pd.DataFrame, signal: str) -> bool:
+        """
+        Returns True if the 4h trend supports the proposed signal direction.
+        BUY  → 4h EMA20 must be above 4h EMA50 (medium-term uptrend)
+        SELL → 4h EMA20 must be below 4h EMA50 (medium-term downtrend)
+        """
+        close_4h = df_4h["close"]
+        ema20_4h = close_4h.ewm(span=20, adjust=False).mean()
+        ema50_4h = close_4h.ewm(span=50, adjust=False).mean()
+        if signal == "BUY":
+            return float(ema20_4h.iloc[-1]) > float(ema50_4h.iloc[-1])
+        else:
+            return float(ema20_4h.iloc[-1]) < float(ema50_4h.iloc[-1])
+
+
+# ─── Sentiment Agent ──────────────────────────────────────────────────────────
+
+class SentimentAgent:
+    """
+    Pulls free crypto news via RSS feeds and scores headlines.
+    Uses a keyword-based approach — no paid API needed.
+    """
+
+    BULLISH_WORDS = [
+        "surge", "rally", "bull", "breakout", "record", "high", "adoption",
+        "inflow", "etf", "institutional", "buy", "gain", "rise", "up",
+        "positive", "growth", "boost", "milestone", "approval",
+    ]
+    BEARISH_WORDS = [
+        "crash", "drop", "bear", "plunge", "hack", "ban", "regulation",
+        "sell", "loss", "fear", "panic", "dump", "warning", "decline",
+        "outflow", "red", "collapse", "fraud", "lawsuit", "debt",
+    ]
+
+    def __init__(self):
+        self._cache: dict = {}
+        self._cache_time: float = 0
+
+    def analyse(self) -> AgentSignal:
+        try:
+            score = self._get_score()
+
+            if score > 0.15:
+                return AgentSignal("sentiment", "BUY",  min(0.5 + score, 0.9),
+                                   f"Bullish sentiment score={score:+.2f}")
+            elif score < -0.15:
+                return AgentSignal("sentiment", "SELL", min(0.5 + abs(score), 0.9),
+                                   f"Bearish sentiment score={score:+.2f}")
+            else:
+                return AgentSignal("sentiment", "HOLD", 0.5,
+                                   f"Neutral sentiment score={score:+.2f}")
+
+        except Exception as e:
+            logger.warning(f"SentimentAgent error: {e}")
+            # On failure, return neutral (don't block trade)
+            return AgentSignal("sentiment", "HOLD", 0.5, f"Feed error — neutral: {e}")
+
+    def _get_score(self) -> float:
+        """Returns -1.0 (very bearish) to +1.0 (very bullish). Cached 5 minutes."""
+        now = time.time()
+        if now - self._cache_time < config.SENTIMENT_CACHE_SECONDS and self._cache:
+            return self._cache["score"]
+
+        headlines = self._fetch_headlines()
+        if not headlines:
+            return 0.0
+
+        scores = []
+        for headline in headlines:
+            h = headline.lower()
+            bull = sum(1 for w in self.BULLISH_WORDS if w in h)
+            bear = sum(1 for w in self.BEARISH_WORDS if w in h)
+            if bull + bear > 0:
+                scores.append((bull - bear) / (bull + bear))
+
+        score = sum(scores) / len(scores) if scores else 0.0
+        self._cache = {"score": score}
+        self._cache_time = now
+        logger.debug(f"Sentiment: {len(headlines)} headlines, score={score:+.3f}")
+        return score
+
+    def _fetch_headlines(self) -> list[str]:
+        headlines = []
+        for feed_url in config.SENTIMENT_FEEDS:
+            try:
+                feed = feedparser.parse(feed_url)
+                for entry in feed.entries[:10]:
+                    headlines.append(entry.get("title", ""))
+            except Exception as e:
+                logger.debug(f"Feed error {feed_url}: {e}")
+        return [h for h in headlines if h]
+
+
+# ─── Risk Agent ───────────────────────────────────────────────────────────────
+
+class RiskAgent:
+    """
+    Approves or blocks a trade based on:
+    - Current drawdown vs kill-switch threshold
+    - Daily loss limit
+    - Consecutive losses (cooldown)
+    - Volatility (ATR)
+    - Trades per day
+    """
+
+    def analyse(self, risk_state: dict, df: pd.DataFrame, signal: Signal = "BUY") -> AgentSignal:
+        """
+        risk_state keys:
+            peak_balance, current_balance, daily_start_balance,
+            consecutive_losses, trades_today, last_loss_time, kill_switch
+        """
+        try:
+            # Kill switch
+            if risk_state.get("kill_switch"):
+                return AgentSignal("risk", "HOLD", 1.0, "Kill switch active — no trading")
+
+            balance  = risk_state["current_balance"]
+            peak     = risk_state["peak_balance"]
+            day_start = risk_state["daily_start_balance"]
+
+            # Drawdown check
+            drawdown = (peak - balance) / peak if peak > 0 else 0
+            if drawdown >= config.MAX_DRAWDOWN_KILL_SWITCH:
+                return AgentSignal("risk", "HOLD", 1.0,
+                                   f"Drawdown {drawdown:.1%} ≥ kill-switch {config.MAX_DRAWDOWN_KILL_SWITCH:.0%}")
+
+            # Daily loss limit
+            daily_loss = (day_start - balance) / day_start if day_start > 0 else 0
+            if daily_loss >= config.MAX_DAILY_LOSS:
+                return AgentSignal("risk", "HOLD", 1.0,
+                                   f"Daily loss {daily_loss:.1%} ≥ limit {config.MAX_DAILY_LOSS:.0%}")
+
+            # Trades per day
+            if risk_state["trades_today"] >= config.MAX_TRADES_PER_DAY:
+                return AgentSignal("risk", "HOLD", 0.9,
+                                   f"Max trades/day reached ({config.MAX_TRADES_PER_DAY})")
+
+            # Cooldown after consecutive losses
+            consec = risk_state["consecutive_losses"]
+            if consec >= config.MAX_CONSECUTIVE_LOSSES:
+                last_loss = risk_state.get("last_loss_time")
+                if last_loss:
+                    elapsed = (datetime.now(timezone.utc) - last_loss).total_seconds() / 60
+                    if elapsed < config.COOLDOWN_MINUTES:
+                        remaining = config.COOLDOWN_MINUTES - elapsed
+                        return AgentSignal("risk", "HOLD", 0.9,
+                                           f"Cooldown active — {remaining:.0f}m remaining after {consec} losses")
+
+            # ATR-based volatility gate — don't trade when volatility is extreme
+            atr = self._atr(df, 14).iloc[-1]
+            close = df["close"].iloc[-1]
+            atr_pct = atr / close
+            if atr_pct > 0.04:  # ATR > 4% of price — market is very wild
+                return AgentSignal("risk", "HOLD", 0.7,
+                                   f"Excessive volatility: ATR={atr_pct:.1%} of price")
+
+            confidence = 1.0 - (drawdown / config.MAX_DRAWDOWN_KILL_SWITCH) * 0.5
+            return AgentSignal("risk", signal, round(confidence, 2),
+                               f"Risk OK: drawdown={drawdown:.1%}, daily_loss={daily_loss:.1%}, ATR={atr_pct:.2%}")
+
+        except Exception as e:
+            logger.warning(f"RiskAgent error: {e}")
+            return AgentSignal("risk", "HOLD", 0.0, f"Error — defaulting to HOLD: {e}")
+
+    @staticmethod
+    def _atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+        high, low, close = df["high"], df["low"], df["close"]
+        prev_close = close.shift(1)
+        tr = pd.concat([
+            high - low,
+            (high - prev_close).abs(),
+            (low  - prev_close).abs(),
+        ], axis=1).max(axis=1)
+        return tr.rolling(period).mean()
+
+
+# ─── Execution Agent ──────────────────────────────────────────────────────────
+
+class ExecutionAgent:
+    """
+    Checks fees, slippage, and minimum order size before approving execution.
+    Also verifies the exchange is reachable.
+    """
+
+    BINANCE_TAKER_FEE = 0.001   # 0.1%
+    SLIPPAGE_ESTIMATE = 0.0005  # 0.05% conservative estimate
+
+    def analyse(self, balance: float, price: float, signal: Signal) -> AgentSignal:
+        try:
+            # Minimum order check
+            order_usdt = max(config.MIN_ORDER_USDT, balance * config.MAX_RISK_PER_TRADE)
+            if balance < config.MIN_ORDER_USDT:
+                return AgentSignal("execution", "HOLD", 1.0,
+                                   f"Balance ${balance:.2f} below minimum order ${config.MIN_ORDER_USDT}")
+
+            # Fee + slippage impact check
+            round_trip_cost = (self.BINANCE_TAKER_FEE + self.SLIPPAGE_ESTIMATE) * 2
+            breakeven_move  = round_trip_cost  # price must move this much to profit
+            atr_required    = breakeven_move   # sanity: we want ATR > breakeven
+
+            reason = (
+                f"Execution OK: order=${order_usdt:.2f}, "
+                f"fees={self.BINANCE_TAKER_FEE:.2%}, "
+                f"slip={self.SLIPPAGE_ESTIMATE:.2%}, "
+                f"breakeven={breakeven_move:.3%}"
+            )
+
+            # Signal passthrough — execution agent gates on feasibility, not direction
+            return AgentSignal("execution", signal if signal != "HOLD" else "HOLD",
+                               0.8, reason)
+
+        except Exception as e:
+            logger.warning(f"ExecutionAgent error: {e}")
+            return AgentSignal("execution", "HOLD", 0.0, f"Error: {e}")
+
+
+# ─── Consensus Engine ─────────────────────────────────────────────────────────
+
+class ConsensusEngine:
+    """
+    Collects signals from all 4 agents and makes the final go/no-go decision.
+    Rule: ALL agents that have an opinion must agree. A HOLD from Risk or Execution
+    always blocks. Technical and Sentiment must agree on direction.
+    """
+
+    def __init__(self):
+        self.technical = TechnicalAgent()
+        self.sentiment  = SentimentAgent()
+        self.risk_agent = RiskAgent()
+        self.execution  = ExecutionAgent()
+
+        # ML filter — transparent passthrough until trained via --train-filter
+        from ml_filter import SignalFilter
+        self.ml_filter = SignalFilter()
+
+    def decide(
+        self,
+        df: pd.DataFrame,
+        regime: str,
+        risk_state: dict,
+        balance: float,
+        price: float,
+        df_4h: pd.DataFrame | None = None,
+    ) -> tuple[Signal, float, list[AgentSignal]]:
+        """
+        Returns (final_signal, confidence_score, [all agent signals])
+
+        df_4h: optional 4h OHLCV data for multi-timeframe trend confirmation.
+               When provided, TechnicalAgent blocks signals that oppose the 4h trend.
+        """
+        tech_sig = self.technical.analyse(df, regime, df_4h)
+        sent_sig = self.sentiment.analyse()
+
+        # Technical must have a directional view
+        if tech_sig.signal == "HOLD":
+            logger.info(f"[CONSENSUS] No signal from Technical: {tech_sig.reason}")
+            return "HOLD", 0.0, [tech_sig, sent_sig]
+
+        # Sentiment affects confidence only — no veto.
+        # RSS keyword scoring has too much noise to reliably block valid signals.
+        direction = tech_sig.signal
+
+        # Risk HOLD is always a hard block; pass direction so approval is directional
+        risk_sig = self.risk_agent.analyse(risk_state, df, direction)
+        if risk_sig.signal == "HOLD":
+            logger.info(f"[CONSENSUS] Blocked by Risk: {risk_sig.reason}")
+            return "HOLD", 0.0, [tech_sig, sent_sig, risk_sig]
+
+        # ML filter — skip low-probability setups (transparent if not yet trained)
+        if self.ml_filter.is_trained:
+            from ml_filter import extract_features
+            feats = extract_features(df, direction)
+            should_trade, win_prob = self.ml_filter.predict(feats)
+            if not should_trade:
+                ml_sig = AgentSignal(
+                    "ml_filter", "HOLD", round(1.0 - win_prob, 2),
+                    f"ML filter blocked: predicted win_prob={win_prob:.1%} < threshold"
+                )
+                logger.info(f"[CONSENSUS] Blocked by ML filter: {ml_sig.reason}")
+                return "HOLD", 0.0, [tech_sig, sent_sig, risk_sig, ml_sig]
+
+        # Execution feasibility check
+        exec_sig = self.execution.analyse(balance, price, direction)
+        if exec_sig.signal == "HOLD":
+            logger.info(f"[CONSENSUS] Blocked by Execution: {exec_sig.reason}")
+            return "HOLD", 0.0, [tech_sig, sent_sig, risk_sig, exec_sig]
+
+        # Weighted confidence
+        w = config.AGENT_WEIGHTS
+        confidence = (
+            w["technical"] * tech_sig.confidence +
+            w["sentiment"]  * sent_sig.confidence +
+            w["risk"]       * risk_sig.confidence +
+            w["execution"]  * exec_sig.confidence
+        )
+
+        logger.info(
+            f"[CONSENSUS] {direction} agreed — confidence={confidence:.2f} | "
+            f"tech={tech_sig.confidence:.2f} sent={sent_sig.confidence:.2f} "
+            f"risk={risk_sig.confidence:.2f} exec={exec_sig.confidence:.2f}"
+        )
+        return direction, round(confidence, 3), [tech_sig, sent_sig, risk_sig, exec_sig]
+</file>
+
+<file path="config.py">
+"""
+config.py — Central configuration loaded from .env
+All secrets and tunable parameters live here. Never hardcode values.
+"""
+
+import os
+from dotenv import load_dotenv
+
+load_dotenv(override=True)  # .env always takes precedence over shell environment variables
+
+# ─── Exchange ────────────────────────────────────────────────────────────────
+EXCHANGE           = os.getenv("EXCHANGE", "binance")   # "binance" | "kucoin"
+BINANCE_API_KEY    = os.getenv("BINANCE_API_KEY", "")
+BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
+BINANCE_TESTNET    = os.getenv("BINANCE_TESTNET", "false").lower() == "true"
+KUCOIN_API_KEY     = os.getenv("KUCOIN_API_KEY", "")
+KUCOIN_API_SECRET  = os.getenv("KUCOIN_API_SECRET", "")
+KUCOIN_PASSPHRASE  = os.getenv("KUCOIN_PASSPHRASE", "")
+
+# ─── Trading ─────────────────────────────────────────────────────────────────
+TRADING_MODE      = os.getenv("TRADING_MODE", "paper")          # "paper" | "live"
+TRADING_PAIR      = os.getenv("TRADING_PAIR", "BTC/USDT")
+BASE_CURRENCY     = os.getenv("BASE_CURRENCY", "USDT")
+STARTING_CAPITAL  = float(os.getenv("STARTING_CAPITAL", "30"))
+
+# Binance minimum notional for BTC/USDT is ~$5 (min qty 0.00001 BTC).
+# We use $11 per trade to stay safely above minimums while capital is small.
+MIN_ORDER_USDT    = float(os.getenv("MIN_ORDER_USDT", "11"))
+
+# ─── Risk ─────────────────────────────────────────────────────────────────────
+MAX_RISK_PER_TRADE       = float(os.getenv("MAX_RISK_PER_TRADE", "0.005"))   # 0.5%
+MAX_DAILY_LOSS           = float(os.getenv("MAX_DAILY_LOSS", "0.01"))         # 1%
+MAX_CONSECUTIVE_LOSSES   = int(os.getenv("MAX_CONSECUTIVE_LOSSES", "2"))
+MAX_TRADES_PER_DAY       = int(os.getenv("MAX_TRADES_PER_DAY", "2"))
+MAX_DRAWDOWN_KILL_SWITCH = float(os.getenv("MAX_DRAWDOWN_KILL_SWITCH", "0.25"))  # 25% — suitable for accounts under $100; tighten to 0.10 above $200
+COOLDOWN_MINUTES         = int(os.getenv("COOLDOWN_MINUTES", "15"))
+
+# ATR multipliers for dynamic SL / TP
+# 1.5× SL was too tight for 1h BTC noise — raised to 2.0× to survive normal retracements
+ATR_STOP_MULT   = float(os.getenv("ATR_STOP_MULT", "2.0"))
+ATR_TARGET_MULT = float(os.getenv("ATR_TARGET_MULT", "3.0"))   # maintains ~1.5:1 RR with wider SL
+
+# Long-only mode: True for spot USDT accounts (cannot short BTC on spot)
+# Set to False only if using futures/margin.
+LONG_ONLY = os.getenv("LONG_ONLY", "true").lower() == "true"
+
+# Volume spike filter: current bar volume must exceed N × 50-bar average
+VOLUME_SPIKE_MIN = float(os.getenv("VOLUME_SPIKE_MIN", "1.2"))
+
+# ─── Strategy ────────────────────────────────────────────────────────────────
+DATA_UPDATE_INTERVAL  = int(os.getenv("DATA_UPDATE_INTERVAL", "60"))   # seconds
+MIN_CANDLES_REQUIRED  = int(os.getenv("MIN_CANDLES_REQUIRED", "100"))
+ADX_TREND_THRESHOLD   = float(os.getenv("ADX_TREND_THRESHOLD", "25"))  # ADX > 25 = trending
+RSI_TREND_BUY_MIN     = float(os.getenv("RSI_TREND_BUY_MIN",  "55"))   # RSI must clear 55, not just 50
+RSI_TREND_SELL_MAX    = float(os.getenv("RSI_TREND_SELL_MAX", "45"))
+RSI_RANGE_BUY_MAX     = float(os.getenv("RSI_RANGE_BUY_MAX",  "30"))   # genuine oversold
+RSI_RANGE_SELL_MIN    = float(os.getenv("RSI_RANGE_SELL_MIN", "70"))   # genuine overbought
+TIMEFRAME             = os.getenv("TIMEFRAME", "1h")
+
+# ─── Agent weights (must sum to 1.0) ─────────────────────────────────────────
+# Consensus: all agents must agree direction; weights used for confidence score
+AGENT_WEIGHTS = {
+    "technical": float(os.getenv("WEIGHT_TECHNICAL", "0.45")),
+    "sentiment":  float(os.getenv("WEIGHT_SENTIMENT",  "0.15")),
+    "risk":       float(os.getenv("WEIGHT_RISK",       "0.25")),
+    "execution":  float(os.getenv("WEIGHT_EXECUTION",  "0.15")),
+}
+
+# ─── Sentiment RSS feeds (free, no API key needed) ───────────────────────────
+SENTIMENT_FEEDS = [
+    "https://feeds.feedburner.com/CoinDesk",
+    "https://cointelegraph.com/rss",
+    "https://bitcoinmagazine.com/.rss/full/",
+    "https://cryptopotato.com/feed/",
+]
+SENTIMENT_CACHE_SECONDS = int(os.getenv("SENTIMENT_CACHE_SECONDS", "300"))  # 5 min
+
+# ─── Database & Logging ───────────────────────────────────────────────────────
+DB_PATH            = os.getenv("DB_PATH", "data/trading.db")
+LOG_LEVEL          = os.getenv("LOG_LEVEL", "INFO")
+LOG_RETENTION_DAYS = int(os.getenv("LOG_RETENTION_DAYS", "90"))
+LOG_DIR            = "logs"
+
+# ─── Telegram ────────────────────────────────────────────────────────────────
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_ENABLED   = os.getenv("TELEGRAM_ENABLED", "true").lower() == "true"
+
+# ─── Resilience ──────────────────────────────────────────────────────────────
+MAX_RECONNECT_ATTEMPTS = int(os.getenv("MAX_RECONNECT_ATTEMPTS", "10"))
+RECONNECT_BACKOFF_BASE = float(os.getenv("RECONNECT_BACKOFF_BASE", "2.0"))   # seconds
+RECONNECT_BACKOFF_MAX  = float(os.getenv("RECONNECT_BACKOFF_MAX", "120.0"))  # 2 min cap
+
+# ─── Kill switch file (manual override) ──────────────────────────────────────
+KILL_SWITCH_FILE = "ops/kill_switch.json"
+
+# ─── Log management ───────────────────────────────────────────────────────────
+# Optional email delivery for compressed logs (uses Gmail SMTP with app password)
+# Generate an app password at: https://myaccount.google.com/apppasswords
+EMAIL_ADDRESS      = os.getenv("EMAIL_ADDRESS", "")
+EMAIL_APP_PASSWORD = os.getenv("EMAIL_APP_PASSWORD", "")
+EMAIL_RECIPIENT    = os.getenv("EMAIL_RECIPIENT", EMAIL_ADDRESS)  # default: send to self
+# Compress logs older than this many hours (keeps disk usage low on AWS free tier)
+LOG_COMPRESS_AFTER_HOURS = int(os.getenv("LOG_COMPRESS_AFTER_HOURS", "24"))
+</file>
+
+<file path=".gitignore">
+# Environment — NEVER commit
+.env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Data & logs
+data/trading.db
+data/raw/
+data/processed/
+logs/
+backtest_results/
+ops/kill_switch.json
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+# SSH keys and certificates — NEVER commit
+*.pem
+*.key
+*.key.pub
 </file>
 
 <file path="bot.py">
@@ -1032,6 +3220,7 @@ def init_db(db_path: str = config.DB_PATH):
         CREATE TABLE IF NOT EXISTS trades (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp    TEXT NOT NULL,
+            entered_at   TEXT,
             signal       TEXT NOT NULL,
             regime       TEXT,
             entry_price  REAL,
@@ -1046,6 +3235,11 @@ def init_db(db_path: str = config.DB_PATH):
             notes        TEXT
         )
     """)
+    try:
+        conn.execute("ALTER TABLE trades ADD COLUMN entered_at TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # column already exists
     conn.execute("""
         CREATE TABLE IF NOT EXISTS decisions (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1084,12 +3278,15 @@ def log_decision(conn, signal, confidence, regime_info, agent_signals, action):
 
 
 def log_trade(conn, trade_data: dict):
+    entered = trade_data.get("entered_at")
+    entered_at_iso = entered.isoformat() if isinstance(entered, datetime) else (entered or "")
     conn.execute(
-        "INSERT INTO trades (timestamp, signal, regime, entry_price, exit_price, "
+        "INSERT INTO trades (timestamp, entered_at, signal, regime, entry_price, exit_price, "
         "size_usdt, pnl_usdt, pnl_pct, stop_loss, take_profit, confidence, mode, notes) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             datetime.now(timezone.utc).isoformat(),
+            entered_at_iso,
             trade_data.get("signal", ""),
             trade_data.get("regime", ""),
             trade_data.get("entry_price", 0),
@@ -1330,7 +3527,7 @@ class PaperTradingEngine:
         self.in_trade  = False
         self.position: dict = {}
 
-    def enter(self, signal: str, price: float, size_usdt: float, levels: dict) -> dict:
+    def enter(self, signal: str, price: float, size_usdt: float, levels: dict, regime: str = "") -> dict:
         if self.in_trade:
             return {}
 
@@ -1342,6 +3539,7 @@ class PaperTradingEngine:
         self.in_trade = True
         self.position = {
             "signal":      signal,
+            "regime":      regime,
             "entry_price": actual_price,
             "size_usdt":   size_usdt,
             "fee_paid":    fee_cost,
@@ -1395,7 +3593,7 @@ class PaperTradingEngine:
         net_pnl      = gross_pnl - exit_fee - pos["fee_paid"]
         pnl_pct      = net_pnl / pos["size_usdt"] * 100
 
-        self.balance += net_pnl + pos["size_usdt"]
+        self.balance += net_pnl
         self.in_trade = False
 
         result = {
@@ -1412,6 +3610,36 @@ class PaperTradingEngine:
         )
         return result
 
+    def force_exit(self, price: float, reason: str = "FORCED") -> dict:
+        """Exit the open position at a given price (e.g. regime flip)."""
+        if not self.in_trade:
+            return {}
+        pos          = self.position
+        signal       = pos["signal"]
+        ep           = pos["entry_price"]
+        slip_factor  = (1 - self.SLIPPAGE) if signal == "BUY" else (1 + self.SLIPPAGE)
+        actual_exit  = price * slip_factor
+        exit_fee     = pos["size_usdt"] * self.FEE
+        sign         = 1 if signal == "BUY" else -1
+        gross_pnl    = sign * (actual_exit - ep) / ep * pos["size_usdt"]
+        net_pnl      = gross_pnl - exit_fee - pos["fee_paid"]
+        pnl_pct      = net_pnl / pos["size_usdt"] * 100
+        self.balance += net_pnl
+        self.in_trade = False
+        result = {
+            **pos,
+            "exit_price":  actual_exit,
+            "exit_time":   datetime.now(timezone.utc),
+            "pnl_usdt":    round(net_pnl, 4),
+            "pnl_pct":     round(pnl_pct, 3),
+            "exit_reason": reason,
+        }
+        logger.info(
+            f"[PAPER] FORCE EXIT {signal}: entry={ep:.2f} exit={actual_exit:.2f} "
+            f"PnL=${net_pnl:+.4f} ({pnl_pct:+.2f}%) [{reason}]"
+        )
+        return result
+
 
 # ─── Main bot loop ────────────────────────────────────────────────────────────
 
@@ -1425,7 +3653,9 @@ class TradingBot:
         self.regime_det = RegimeDetector()
         self.strategy   = TradingStrategy()
         self.paper_eng: PaperTradingEngine | None = None
-        self._running   = True
+        self._running          = True
+        self._last_heartbeat   = 0.0   # monotonic timestamp of last Telegram heartbeat
+        self._bot_start        = time.monotonic()
 
         init_db()
         self.db = sqlite3.connect(config.DB_PATH, check_same_thread=False)
@@ -1471,6 +3701,19 @@ class TradingBot:
                     logger.critical("Too many consecutive errors — halting")
                     break
 
+            # Hourly Telegram heartbeat — confirms server is still alive
+            now_mono = time.monotonic()
+            if now_mono - self._last_heartbeat >= 3600:
+                uptime_h = int((now_mono - self._bot_start) / 3600)
+                uptime_m = int((now_mono - self._bot_start) % 3600 / 60)
+                send_telegram(
+                    f"💓 Bot heartbeat — still running\n"
+                    f"Uptime: {uptime_h}h {uptime_m}m\n"
+                    f"Balance: ${self.risk.current_balance:.2f}\n"
+                    f"Pair: {config.TRADING_PAIR} | Mode: {'LIVE' if self.live else 'PAPER'}"
+                )
+                self._last_heartbeat = now_mono
+
             # Daily: compress old logs to save AWS disk space
             if (datetime.now() - last_log_compress).total_seconds() > 86400:
                 compress_old_logs()
@@ -1515,12 +3758,20 @@ class TradingBot:
 
         balance = self.risk.current_balance
 
-        # 3. Check open paper trade for exit
+        # 3. Detect regime (needed before exit check for regime-flip logic)
+        regime_info = self.regime_det.detect(df)
+        regime      = regime_info["regime"]
+
+        # 4. Check open paper trade for exit
         if self.paper_eng and self.paper_eng.in_trade:
-            exit_result = self.paper_eng.check_exit(high, low)
+            entry_regime = self.paper_eng.position.get("regime", "")
+            if entry_regime and regime != entry_regime:
+                exit_result = self.paper_eng.force_exit(close, "REGIME_FLIP")
+            else:
+                exit_result = self.paper_eng.check_exit(high, low)
             if exit_result:
                 self.risk.record_trade(exit_result["pnl_usdt"])
-                log_trade(self.db, {**exit_result, "regime": exit_result.get("signal", "")})
+                log_trade(self.db, exit_result)
                 send_telegram(
                     f"Trade closed [{exit_result['exit_reason']}]\n"
                     f"{exit_result['signal']} @ {exit_result['exit_price']:.2f}\n"
@@ -1528,13 +3779,9 @@ class TradingBot:
                     f"{self.risk.summary()}"
                 )
 
-        # 4. Skip entry if already in trade
+        # 5. Skip entry if already in trade
         if (self.paper_eng and self.paper_eng.in_trade) or self.risk.kill_switch:
             return
-
-        # 5. Detect regime
-        regime_info = self.regime_det.detect(df)
-        regime      = regime_info["regime"]
 
         # 6. Run 4-agent consensus (+ MTF filter + ML filter)
         risk_state  = self.risk.state()
@@ -1549,13 +3796,13 @@ class TradingBot:
             f"signal={signal} conf={confidence:.2f} | {self.risk.summary()}"
         )
 
-        # 8. Execute if consensus says go
-        if signal in ("BUY", "SELL"):
+        # 8. Execute if consensus says go and confidence is sufficient
+        if signal in ("BUY", "SELL") and confidence >= 0.6:
             levels   = self.strategy.compute_levels(df, signal, regime)
             size     = self.risk.position_size_usdt()
 
             if not self.live and self.paper_eng:
-                self.paper_eng.enter(signal, close, size, levels)
+                self.paper_eng.enter(signal, close, size, levels, regime)
                 send_telegram(
                     f"Trade entered [PAPER]\n"
                     f"{signal} @ {close:.2f}\n"
@@ -1651,901 +3898,6 @@ if __name__ == "__main__":
     main()
 </file>
 
-<file path="ml_filter.py">
-"""
-ml_filter.py — ML-based signal quality filter.
-
-Trains a logistic regression on historical backtest trade outcomes.
-At inference, filters out signals with low predicted win probability.
-
-Training flow:
-    python bot.py --train-filter   # runs backtest, extracts features, trains model
-
-Inference: loaded automatically by ConsensusEngine when ops/signal_filter.pkl exists.
-If no model is trained yet, filter is transparent (all signals pass through).
-"""
-
-from __future__ import annotations
-
-import logging
-import pickle
-from pathlib import Path
-
-import numpy as np
-import pandas as pd
-
-logger = logging.getLogger(__name__)
-
-MODEL_PATH = Path("ops/signal_filter.pkl")
-MIN_TRADES_TO_TRAIN = 20  # minimum historical trades needed
-
-# Feature order must never change once a model is trained
-FEATURE_ORDER = [
-    "rsi",
-    "atr_pct",
-    "macd_hist",
-    "ema20_dist",
-    "ema50_dist",
-    "ema200_dist",
-    "vol_ratio",
-    "adx",
-    "is_buy",
-]
-
-
-def extract_features(df: pd.DataFrame, signal: str) -> dict:
-    """
-    Extract ML features from a window of OHLCV data at entry time.
-    Must be called identically in both backtest (training) and live bot (inference).
-
-    df: window of OHLCV bars ending at the entry candle
-    signal: "BUY" or "SELL"
-    """
-    close = df["close"]
-    high  = df["high"]
-    low   = df["low"]
-
-    # ── RSI(14) ────────────────────────────────────────────────────────────────
-    delta = close.diff()
-    gain  = delta.clip(lower=0).rolling(14).mean()
-    loss  = (-delta.clip(upper=0)).rolling(14).mean()
-    rs    = gain / loss.replace(0, 1e-10)
-    rsi   = float((100 - (100 / (1 + rs))).iloc[-1])
-
-    # ── ATR % of price ────────────────────────────────────────────────────────
-    prev_close = close.shift(1)
-    tr = pd.concat([
-        high - low,
-        (high - prev_close).abs(),
-        (low  - prev_close).abs(),
-    ], axis=1).max(axis=1)
-    atr     = float(tr.rolling(14).mean().iloc[-1])
-    atr_pct = atr / float(close.iloc[-1])
-
-    # ── MACD histogram ────────────────────────────────────────────────────────
-    ema_fast    = close.ewm(span=12, adjust=False).mean()
-    ema_slow    = close.ewm(span=26, adjust=False).mean()
-    macd_line   = ema_fast - ema_slow
-    signal_line = macd_line.ewm(span=9, adjust=False).mean()
-    macd_hist   = float((macd_line - signal_line).iloc[-1])
-
-    # ── EMA distances (% from price) ──────────────────────────────────────────
-    ema20  = close.ewm(span=20,  adjust=False).mean()
-    ema50  = close.ewm(span=50,  adjust=False).mean()
-    ema200 = close.ewm(span=200, adjust=False).mean()
-    lc = float(close.iloc[-1])
-    ema20_dist  = (lc - float(ema20.iloc[-1]))  / lc
-    ema50_dist  = (lc - float(ema50.iloc[-1]))  / lc
-    ema200_dist = (lc - float(ema200.iloc[-1])) / lc
-
-    # ── Volume ratio (current vs 20-bar avg) ──────────────────────────────────
-    vol_avg   = float(df["volume"].rolling(20).mean().iloc[-1])
-    vol_ratio = float(df["volume"].iloc[-1]) / vol_avg if vol_avg > 0 else 1.0
-
-    # ── ADX(14) ───────────────────────────────────────────────────────────────
-    up_move   = high.diff()
-    down_move = -low.diff()
-    plus_dm   = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
-    minus_dm  = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
-    atr_14    = tr.rolling(14).mean()
-    plus_di   = 100 * (plus_dm.rolling(14).mean() / atr_14.replace(0, 1e-10))
-    minus_di  = 100 * (minus_dm.rolling(14).mean() / atr_14.replace(0, 1e-10))
-    dx        = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, 1e-10)
-    adx       = float(dx.rolling(14).mean().iloc[-1])
-
-    return {
-        "rsi":        rsi,
-        "atr_pct":    atr_pct,
-        "macd_hist":  macd_hist,
-        "ema20_dist": ema20_dist,
-        "ema50_dist": ema50_dist,
-        "ema200_dist": ema200_dist,
-        "vol_ratio":  vol_ratio,
-        "adx":        adx,
-        "is_buy":     1.0 if signal == "BUY" else 0.0,
-    }
-
-
-def features_to_array(features: dict) -> np.ndarray:
-    """Convert a feature dict to a numpy array in the canonical feature order."""
-    return np.array([features[k] for k in FEATURE_ORDER], dtype=float)
-
-
-class SignalFilter:
-    """
-    Logistic regression filter trained on historical backtest trade outcomes.
-
-    - sklearn is only required for training (--train-filter).
-    - Inference uses stored weights/bias — no sklearn dependency at runtime.
-    - When no model exists yet, predict() is a transparent passthrough.
-    """
-
-    THRESHOLD = 0.45  # block only if model is actively confident it's a loss (<45% win prob)
-                      # at 62 training samples CV accuracy is ~45% — effectively disabled
-                      # until 200+ trades accumulate
-
-    def __init__(self):
-        self._model: dict | None = None
-        self._load()
-
-    @property
-    def is_trained(self) -> bool:
-        return self._model is not None
-
-    def _load(self):
-        if MODEL_PATH.exists():
-            try:
-                with open(MODEL_PATH, "rb") as f:
-                    self._model = pickle.load(f)
-                logger.info(
-                    f"ML filter loaded — "
-                    f"n={self._model.get('n_samples', '?')} trades, "
-                    f"base_win_rate={self._model.get('win_rate', 0):.1%}"
-                )
-            except Exception as e:
-                logger.warning(f"ML filter load failed: {e}")
-                self._model = None
-
-    def predict(self, features: dict) -> tuple[bool, float]:
-        """
-        Returns (should_trade, win_probability).
-        If no model trained yet: returns (True, 0.5) — transparent passthrough.
-        On any error: returns (True, 0.5) — fail-open, never blocks trading.
-        """
-        if not self.is_trained:
-            return True, 0.5
-        try:
-            x = features_to_array(features).reshape(1, -1)
-            x_norm = (x - self._model["mean"]) / (self._model["std"] + 1e-10)
-            logit  = float(
-                np.dot(x_norm, self._model["weights"]) + self._model["bias"]
-            )
-            prob = float(1.0 / (1.0 + np.exp(-logit)))
-            return prob >= self.THRESHOLD, round(prob, 3)
-        except Exception as e:
-            logger.warning(f"ML filter predict error: {e}")
-            return True, 0.5
-
-    def train(self, features_list: list[dict], outcomes: list[int]) -> bool:
-        """
-        Train on a list of feature dicts and binary outcomes (1=win, 0=loss).
-        Saves model to ops/signal_filter.pkl. Returns True on success.
-
-        Requires scikit-learn (pip install scikit-learn).
-        """
-        try:
-            from sklearn.linear_model import LogisticRegression
-            from sklearn.preprocessing import StandardScaler
-            from sklearn.model_selection import cross_val_score
-        except ImportError:
-            logger.error("scikit-learn not installed — run: pip install scikit-learn")
-            return False
-
-        n = len(features_list)
-        if n < MIN_TRADES_TO_TRAIN:
-            logger.warning(
-                f"Only {n} trades — need {MIN_TRADES_TO_TRAIN} to train the filter. "
-                f"Run a longer backtest (try --backtest-days 600) first."
-            )
-            return False
-
-        X = np.array([features_to_array(f) for f in features_list])
-        y = np.array(outcomes, dtype=int)
-
-        scaler = StandardScaler()
-        X_sc   = scaler.fit_transform(X)
-
-        # C=0.5 gives mild L2 regularisation — avoids overfitting on small datasets
-        clf = LogisticRegression(C=0.5, max_iter=1000, random_state=42)
-
-        if n >= 30:
-            folds = min(5, n // 6)
-            cv = cross_val_score(clf, X_sc, y, cv=folds, scoring="accuracy")
-            logger.info(
-                f"ML filter cross-val accuracy: {cv.mean():.1%} ± {cv.std():.1%} "
-                f"({folds}-fold)"
-            )
-
-        clf.fit(X_sc, y)
-
-        # Store as pure numpy so inference needs no sklearn
-        model_data = {
-            "mean":      scaler.mean_,
-            "std":       scaler.scale_,
-            "weights":   clf.coef_[0],
-            "bias":      clf.intercept_[0],
-            "n_samples": n,
-            "win_rate":  float(y.mean()),
-        }
-
-        MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(MODEL_PATH, "wb") as f:
-            pickle.dump(model_data, f)
-
-        self._model = model_data
-        logger.info(
-            f"ML filter trained: {n} samples, "
-            f"win_rate={y.mean():.1%} — saved to {MODEL_PATH}"
-        )
-        return True
-</file>
-
-<file path="agents.py">
-"""
-agents.py — The 4-agent consensus decision system.
-
-A trade only executes when ALL agents agree on direction.
-Each agent returns: {"signal": "BUY"|"SELL"|"HOLD", "confidence": 0.0-1.0, "reason": str}
-"""
-
-from __future__ import annotations
-
-import logging
-import time
-from dataclasses import dataclass
-from typing import Literal
-from datetime import datetime, timezone
-
-import pandas as pd
-import feedparser
-from bs4 import BeautifulSoup
-import requests
-
-import config
-
-logger = logging.getLogger(__name__)
-
-Signal = Literal["BUY", "SELL", "HOLD"]
-
-
-@dataclass
-class AgentSignal:
-    agent: str
-    signal: Signal
-    confidence: float   # 0.0 – 1.0
-    reason: str
-
-
-# ─── Technical Agent ──────────────────────────────────────────────────────────
-
-class TechnicalAgent:
-    """
-    Uses RSI, MACD, Bollinger Bands, and Moving Averages.
-    Switches logic based on market regime passed in from strategy.
-    """
-
-    def analyse(
-        self,
-        df: pd.DataFrame,
-        regime: str,
-        df_4h: pd.DataFrame | None = None,
-    ) -> AgentSignal:
-        """
-        df     : 1h OHLCV window (open, high, low, close, volume)
-        regime : "trending" | "ranging"
-        df_4h  : optional 4h OHLCV window for multi-timeframe confirmation.
-                 When provided, BUY signals require 4h EMA20 > EMA50 (medium-term
-                 uptrend) and SELL signals require 4h EMA20 < EMA50.
-        """
-        try:
-            close = df["close"]
-            signals = []
-            reasons = []
-
-            # ── Volume filter ─────────────────────────────────────────────────
-            # 50-bar average gives a stable baseline — a 20-bar window gets
-            # inflated too quickly by a short burst, making spikes impossible to hit
-            vol_avg   = df["volume"].rolling(50).mean().iloc[-1]
-            vol_spike = df["volume"].iloc[-1] > vol_avg * config.VOLUME_SPIKE_MIN
-
-            # ── RSI (14) ──────────────────────────────────────────────────────
-            rsi = self._rsi(close, 14)
-            last_rsi = rsi.iloc[-1]
-
-            # ── MACD ──────────────────────────────────────────────────────────
-            macd_line, signal_line = self._macd(close)
-            hist         = macd_line - signal_line
-            macd_hist    = hist.iloc[-1]
-            macd_hist_1  = hist.iloc[-2]   # previous bar
-            # Crossover within last 2 bars — enter close to the actual cross, not late
-            macd_cross_up   = (macd_line.iloc[-1] > signal_line.iloc[-1] and
-                               macd_line.iloc[-2] <= signal_line.iloc[-2])
-            macd_cross_down = (macd_line.iloc[-1] < signal_line.iloc[-1] and
-                               macd_line.iloc[-2] >= signal_line.iloc[-2])
-            # Histogram momentum: histogram must be expanding (gaining strength)
-            hist_expanding_up   = macd_hist > 0 and macd_hist > macd_hist_1
-            hist_expanding_down = macd_hist < 0 and macd_hist < macd_hist_1
-
-            # ── Bollinger Bands (20, 2σ) ──────────────────────────────────────
-            bb_upper, bb_mid, bb_lower = self._bollinger(close, 20, 2)
-            last_close = close.iloc[-1]
-            bb_width = (bb_upper.iloc[-1] - bb_lower.iloc[-1]) / bb_mid.iloc[-1]
-            # Avoid mean-reversion trades when bands are very narrow (low-vol squeeze)
-            bb_wide_enough = bb_width > 0.01  # bands span at least 1% of price
-
-            # ── Moving Averages ───────────────────────────────────────────────
-            ema20  = close.ewm(span=20,  adjust=False).mean()
-            ema50  = close.ewm(span=50,  adjust=False).mean()
-            ema200 = close.ewm(span=200, adjust=False).mean()
-            trend_up   = ema20.iloc[-1] > ema50.iloc[-1] > ema200.iloc[-1]
-            trend_down = ema20.iloc[-1] < ema50.iloc[-1] < ema200.iloc[-1]
-            # EMA slope: short-term trend must be accelerating, not exhausted
-            ema20_slope_up   = ema20.iloc[-1] > ema20.iloc[-3]
-            ema20_slope_down = ema20.iloc[-1] < ema20.iloc[-3]
-            # 200 EMA macro filter: only BUY when price is above long-term trend.
-            # In trending mode this is already guaranteed by trend_up (EMA20>EMA50>EMA200),
-            # but we keep it explicitly for ranging-mode BUY to block bear-market dip catches.
-            above_ema200 = last_close > ema200.iloc[-1]
-
-            if not vol_spike:
-                # Low-volume bar: any signal here is likely a fake-out — skip it
-                return AgentSignal("technical", "HOLD", 0.5,
-                                   f"Low volume (bar={df['volume'].iloc[-1]:.0f} < {vol_avg*config.VOLUME_SPIKE_MIN:.0f}) — skipping")
-
-            if regime == "trending":
-                # Trend-following: all conditions must align including macro trend filter
-                # trend_up = EMA20>EMA50>EMA200, which already implies price > EMA200
-                if (trend_up and macd_cross_up and hist_expanding_up
-                        and last_rsi > config.RSI_TREND_BUY_MIN and ema20_slope_up):
-                    signals.append("BUY")
-                    reasons.append(
-                        f"Trend UP: EMA stack, MACD cross+expanding, vol spike, RSI={last_rsi:.1f}"
-                    )
-                elif (not config.LONG_ONLY and trend_down and macd_cross_down
-                        and hist_expanding_down
-                        and last_rsi < config.RSI_TREND_SELL_MAX and ema20_slope_down):
-                    signals.append("SELL")
-                    reasons.append(
-                        f"Trend DOWN: EMA stack, MACD cross+expanding, RSI={last_rsi:.1f}"
-                    )
-                else:
-                    signals.append("HOLD")
-                    reasons.append(
-                        f"Trend — conditions not met (RSI={last_rsi:.1f}, trend_up={trend_up})"
-                    )
-
-            else:  # ranging / mean reversion
-                # Only buy dips that are above the 200 EMA — not catching falling knives
-                if (bb_wide_enough and last_close <= bb_lower.iloc[-1]
-                        and last_rsi < config.RSI_RANGE_BUY_MAX
-                        and above_ema200):
-                    signals.append("BUY")
-                    reasons.append(
-                        f"Mean reversion BUY: below lower BB, above EMA200, RSI={last_rsi:.1f}"
-                    )
-                elif (not config.LONG_ONLY and bb_wide_enough
-                        and last_close >= bb_upper.iloc[-1]
-                        and last_rsi > config.RSI_RANGE_SELL_MIN):
-                    signals.append("SELL")
-                    reasons.append(
-                        f"Mean reversion SELL: above upper BB, RSI={last_rsi:.1f}"
-                    )
-                else:
-                    signals.append("HOLD")
-                    reasons.append(f"No mean-reversion trigger (RSI={last_rsi:.1f})")
-
-            signal = signals[0]
-
-            # ── Multi-timeframe confirmation (4h) ─────────────────────────────
-            # Only apply when 4h data is available and we have a directional view.
-            # Prevents entering 1h trades that fight the medium-term trend.
-            if signal != "HOLD" and df_4h is not None and len(df_4h) >= 50:
-                if not self._check_4h_alignment(df_4h, signal):
-                    return AgentSignal(
-                        "technical", "HOLD", 0.5,
-                        f"4h trend opposes 1h {signal} — skipping"
-                    )
-
-            # Confidence: how many sub-signals agree (each = 0.2 above base 0.4)
-            sub_agrees = sum([
-                (signal == "BUY"  and trend_up)              or (signal == "SELL" and trend_down),
-                (signal == "BUY"  and hist_expanding_up)     or (signal == "SELL" and hist_expanding_down),
-                (signal == "BUY"  and last_rsi > config.RSI_TREND_BUY_MIN) or
-                (signal == "SELL" and last_rsi < config.RSI_TREND_SELL_MAX),
-            ])
-            confidence = 0.4 + 0.2 * sub_agrees if signal != "HOLD" else 0.5
-
-            return AgentSignal("technical", signal, round(confidence, 2), reasons[0])
-
-        except Exception as e:
-            logger.warning(f"TechnicalAgent error: {e}")
-            return AgentSignal("technical", "HOLD", 0.0, f"Error: {e}")
-
-    # ── Indicator helpers (pure pandas, no TA-Lib dependency) ─────────────────
-
-    @staticmethod
-    def _rsi(series: pd.Series, period: int = 14) -> pd.Series:
-        delta = series.diff()
-        gain  = delta.clip(lower=0).rolling(period).mean()
-        loss  = (-delta.clip(upper=0)).rolling(period).mean()
-        rs    = gain / loss.replace(0, 1e-10)
-        return 100 - (100 / (1 + rs))
-
-    @staticmethod
-    def _macd(series: pd.Series, fast=12, slow=26, signal=9):
-        ema_fast   = series.ewm(span=fast,   adjust=False).mean()
-        ema_slow   = series.ewm(span=slow,   adjust=False).mean()
-        macd_line  = ema_fast - ema_slow
-        signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-        return macd_line, signal_line
-
-    @staticmethod
-    def _bollinger(series: pd.Series, period=20, std_dev=2):
-        mid   = series.rolling(period).mean()
-        std   = series.rolling(period).std()
-        upper = mid + std_dev * std
-        lower = mid - std_dev * std
-        return upper, mid, lower
-
-    @staticmethod
-    def _check_4h_alignment(df_4h: pd.DataFrame, signal: str) -> bool:
-        """
-        Returns True if the 4h trend supports the proposed signal direction.
-        BUY  → 4h EMA20 must be above 4h EMA50 (medium-term uptrend)
-        SELL → 4h EMA20 must be below 4h EMA50 (medium-term downtrend)
-        """
-        close_4h = df_4h["close"]
-        ema20_4h = close_4h.ewm(span=20, adjust=False).mean()
-        ema50_4h = close_4h.ewm(span=50, adjust=False).mean()
-        if signal == "BUY":
-            return float(ema20_4h.iloc[-1]) > float(ema50_4h.iloc[-1])
-        else:
-            return float(ema20_4h.iloc[-1]) < float(ema50_4h.iloc[-1])
-
-
-# ─── Sentiment Agent ──────────────────────────────────────────────────────────
-
-class SentimentAgent:
-    """
-    Pulls free crypto news via RSS feeds and scores headlines.
-    Uses a keyword-based approach — no paid API needed.
-    """
-
-    BULLISH_WORDS = [
-        "surge", "rally", "bull", "breakout", "record", "high", "adoption",
-        "inflow", "etf", "institutional", "buy", "gain", "rise", "up",
-        "positive", "growth", "boost", "milestone", "approval",
-    ]
-    BEARISH_WORDS = [
-        "crash", "drop", "bear", "plunge", "hack", "ban", "regulation",
-        "sell", "loss", "fear", "panic", "dump", "warning", "decline",
-        "outflow", "red", "collapse", "fraud", "lawsuit", "debt",
-    ]
-
-    def __init__(self):
-        self._cache: dict = {}
-        self._cache_time: float = 0
-
-    def analyse(self) -> AgentSignal:
-        try:
-            score = self._get_score()
-
-            if score > 0.15:
-                return AgentSignal("sentiment", "BUY",  min(0.5 + score, 0.9),
-                                   f"Bullish sentiment score={score:+.2f}")
-            elif score < -0.15:
-                return AgentSignal("sentiment", "SELL", min(0.5 + abs(score), 0.9),
-                                   f"Bearish sentiment score={score:+.2f}")
-            else:
-                return AgentSignal("sentiment", "HOLD", 0.5,
-                                   f"Neutral sentiment score={score:+.2f}")
-
-        except Exception as e:
-            logger.warning(f"SentimentAgent error: {e}")
-            # On failure, return neutral (don't block trade)
-            return AgentSignal("sentiment", "HOLD", 0.5, f"Feed error — neutral: {e}")
-
-    def _get_score(self) -> float:
-        """Returns -1.0 (very bearish) to +1.0 (very bullish). Cached 5 minutes."""
-        now = time.time()
-        if now - self._cache_time < config.SENTIMENT_CACHE_SECONDS and self._cache:
-            return self._cache["score"]
-
-        headlines = self._fetch_headlines()
-        if not headlines:
-            return 0.0
-
-        scores = []
-        for headline in headlines:
-            h = headline.lower()
-            bull = sum(1 for w in self.BULLISH_WORDS if w in h)
-            bear = sum(1 for w in self.BEARISH_WORDS if w in h)
-            if bull + bear > 0:
-                scores.append((bull - bear) / (bull + bear))
-
-        score = sum(scores) / len(scores) if scores else 0.0
-        self._cache = {"score": score}
-        self._cache_time = now
-        logger.debug(f"Sentiment: {len(headlines)} headlines, score={score:+.3f}")
-        return score
-
-    def _fetch_headlines(self) -> list[str]:
-        headlines = []
-        for feed_url in config.SENTIMENT_FEEDS:
-            try:
-                feed = feedparser.parse(feed_url)
-                for entry in feed.entries[:10]:
-                    headlines.append(entry.get("title", ""))
-            except Exception as e:
-                logger.debug(f"Feed error {feed_url}: {e}")
-        return [h for h in headlines if h]
-
-
-# ─── Risk Agent ───────────────────────────────────────────────────────────────
-
-class RiskAgent:
-    """
-    Approves or blocks a trade based on:
-    - Current drawdown vs kill-switch threshold
-    - Daily loss limit
-    - Consecutive losses (cooldown)
-    - Volatility (ATR)
-    - Trades per day
-    """
-
-    def analyse(self, risk_state: dict, df: pd.DataFrame) -> AgentSignal:
-        """
-        risk_state keys:
-            peak_balance, current_balance, daily_start_balance,
-            consecutive_losses, trades_today, last_loss_time, kill_switch
-        """
-        try:
-            # Kill switch
-            if risk_state.get("kill_switch"):
-                return AgentSignal("risk", "HOLD", 1.0, "Kill switch active — no trading")
-
-            balance  = risk_state["current_balance"]
-            peak     = risk_state["peak_balance"]
-            day_start = risk_state["daily_start_balance"]
-
-            # Drawdown check
-            drawdown = (peak - balance) / peak if peak > 0 else 0
-            if drawdown >= config.MAX_DRAWDOWN_KILL_SWITCH:
-                return AgentSignal("risk", "HOLD", 1.0,
-                                   f"Drawdown {drawdown:.1%} ≥ kill-switch {config.MAX_DRAWDOWN_KILL_SWITCH:.0%}")
-
-            # Daily loss limit
-            daily_loss = (day_start - balance) / day_start if day_start > 0 else 0
-            if daily_loss >= config.MAX_DAILY_LOSS:
-                return AgentSignal("risk", "HOLD", 1.0,
-                                   f"Daily loss {daily_loss:.1%} ≥ limit {config.MAX_DAILY_LOSS:.0%}")
-
-            # Trades per day
-            if risk_state["trades_today"] >= config.MAX_TRADES_PER_DAY:
-                return AgentSignal("risk", "HOLD", 0.9,
-                                   f"Max trades/day reached ({config.MAX_TRADES_PER_DAY})")
-
-            # Cooldown after consecutive losses
-            consec = risk_state["consecutive_losses"]
-            if consec >= config.MAX_CONSECUTIVE_LOSSES:
-                last_loss = risk_state.get("last_loss_time")
-                if last_loss:
-                    elapsed = (datetime.now(timezone.utc) - last_loss).total_seconds() / 60
-                    if elapsed < config.COOLDOWN_MINUTES:
-                        remaining = config.COOLDOWN_MINUTES - elapsed
-                        return AgentSignal("risk", "HOLD", 0.9,
-                                           f"Cooldown active — {remaining:.0f}m remaining after {consec} losses")
-
-            # ATR-based volatility gate — don't trade when volatility is extreme
-            atr = self._atr(df, 14).iloc[-1]
-            close = df["close"].iloc[-1]
-            atr_pct = atr / close
-            if atr_pct > 0.04:  # ATR > 4% of price — market is very wild
-                return AgentSignal("risk", "HOLD", 0.7,
-                                   f"Excessive volatility: ATR={atr_pct:.1%} of price")
-
-            confidence = 1.0 - (drawdown / config.MAX_DRAWDOWN_KILL_SWITCH) * 0.5
-            return AgentSignal("risk", "BUY", round(confidence, 2),
-                               f"Risk OK: drawdown={drawdown:.1%}, daily_loss={daily_loss:.1%}, ATR={atr_pct:.2%}")
-
-        except Exception as e:
-            logger.warning(f"RiskAgent error: {e}")
-            return AgentSignal("risk", "HOLD", 0.0, f"Error — defaulting to HOLD: {e}")
-
-    @staticmethod
-    def _atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
-        high, low, close = df["high"], df["low"], df["close"]
-        prev_close = close.shift(1)
-        tr = pd.concat([
-            high - low,
-            (high - prev_close).abs(),
-            (low  - prev_close).abs(),
-        ], axis=1).max(axis=1)
-        return tr.rolling(period).mean()
-
-
-# ─── Execution Agent ──────────────────────────────────────────────────────────
-
-class ExecutionAgent:
-    """
-    Checks fees, slippage, and minimum order size before approving execution.
-    Also verifies the exchange is reachable.
-    """
-
-    BINANCE_TAKER_FEE = 0.001   # 0.1%
-    SLIPPAGE_ESTIMATE = 0.0005  # 0.05% conservative estimate
-
-    def analyse(self, balance: float, price: float, signal: Signal) -> AgentSignal:
-        try:
-            # Minimum order check
-            order_usdt = max(config.MIN_ORDER_USDT, balance * config.MAX_RISK_PER_TRADE)
-            if balance < config.MIN_ORDER_USDT:
-                return AgentSignal("execution", "HOLD", 1.0,
-                                   f"Balance ${balance:.2f} below minimum order ${config.MIN_ORDER_USDT}")
-
-            # Fee + slippage impact check
-            round_trip_cost = (self.BINANCE_TAKER_FEE + self.SLIPPAGE_ESTIMATE) * 2
-            breakeven_move  = round_trip_cost  # price must move this much to profit
-            atr_required    = breakeven_move   # sanity: we want ATR > breakeven
-
-            reason = (
-                f"Execution OK: order=${order_usdt:.2f}, "
-                f"fees={self.BINANCE_TAKER_FEE:.2%}, "
-                f"slip={self.SLIPPAGE_ESTIMATE:.2%}, "
-                f"breakeven={breakeven_move:.3%}"
-            )
-
-            # Signal passthrough — execution agent gates on feasibility, not direction
-            return AgentSignal("execution", signal if signal != "HOLD" else "HOLD",
-                               0.8, reason)
-
-        except Exception as e:
-            logger.warning(f"ExecutionAgent error: {e}")
-            return AgentSignal("execution", "HOLD", 0.0, f"Error: {e}")
-
-
-# ─── Consensus Engine ─────────────────────────────────────────────────────────
-
-class ConsensusEngine:
-    """
-    Collects signals from all 4 agents and makes the final go/no-go decision.
-    Rule: ALL agents that have an opinion must agree. A HOLD from Risk or Execution
-    always blocks. Technical and Sentiment must agree on direction.
-    """
-
-    def __init__(self):
-        self.technical = TechnicalAgent()
-        self.sentiment  = SentimentAgent()
-        self.risk_agent = RiskAgent()
-        self.execution  = ExecutionAgent()
-
-        # ML filter — transparent passthrough until trained via --train-filter
-        from ml_filter import SignalFilter
-        self.ml_filter = SignalFilter()
-
-    def decide(
-        self,
-        df: pd.DataFrame,
-        regime: str,
-        risk_state: dict,
-        balance: float,
-        price: float,
-        df_4h: pd.DataFrame | None = None,
-    ) -> tuple[Signal, float, list[AgentSignal]]:
-        """
-        Returns (final_signal, confidence_score, [all agent signals])
-
-        df_4h: optional 4h OHLCV data for multi-timeframe trend confirmation.
-               When provided, TechnicalAgent blocks signals that oppose the 4h trend.
-        """
-        tech_sig = self.technical.analyse(df, regime, df_4h)
-        sent_sig = self.sentiment.analyse()
-        risk_sig = self.risk_agent.analyse(risk_state, df)
-
-        # Risk HOLD is always a hard block
-        if risk_sig.signal == "HOLD":
-            logger.info(f"[CONSENSUS] Blocked by Risk: {risk_sig.reason}")
-            return "HOLD", 0.0, [tech_sig, sent_sig, risk_sig]
-
-        # Technical must have a directional view
-        if tech_sig.signal == "HOLD":
-            logger.info(f"[CONSENSUS] No signal from Technical: {tech_sig.reason}")
-            return "HOLD", 0.0, [tech_sig, sent_sig, risk_sig]
-
-        # Sentiment must not oppose (HOLD is neutral — allowed)
-        direction = tech_sig.signal
-        if sent_sig.signal not in (direction, "HOLD"):
-            logger.info(
-                f"[CONSENSUS] Sentiment disagrees: tech={direction}, sent={sent_sig.signal}"
-            )
-            return "HOLD", 0.0, [tech_sig, sent_sig, risk_sig]
-
-        # ML filter — skip low-probability setups (transparent if not yet trained)
-        if self.ml_filter.is_trained:
-            from ml_filter import extract_features
-            feats = extract_features(df, direction)
-            should_trade, win_prob = self.ml_filter.predict(feats)
-            if not should_trade:
-                ml_sig = AgentSignal(
-                    "ml_filter", "HOLD", round(1.0 - win_prob, 2),
-                    f"ML filter blocked: predicted win_prob={win_prob:.1%} < threshold"
-                )
-                logger.info(f"[CONSENSUS] Blocked by ML filter: {ml_sig.reason}")
-                return "HOLD", 0.0, [tech_sig, sent_sig, risk_sig, ml_sig]
-
-        # Execution feasibility check
-        exec_sig = self.execution.analyse(balance, price, direction)
-        if exec_sig.signal == "HOLD":
-            logger.info(f"[CONSENSUS] Blocked by Execution: {exec_sig.reason}")
-            return "HOLD", 0.0, [tech_sig, sent_sig, risk_sig, exec_sig]
-
-        # Weighted confidence
-        w = config.AGENT_WEIGHTS
-        confidence = (
-            w["technical"] * tech_sig.confidence +
-            w["sentiment"]  * sent_sig.confidence +
-            w["risk"]       * risk_sig.confidence +
-            w["execution"]  * exec_sig.confidence
-        )
-
-        logger.info(
-            f"[CONSENSUS] {direction} agreed — confidence={confidence:.2f} | "
-            f"tech={tech_sig.confidence:.2f} sent={sent_sig.confidence:.2f} "
-            f"risk={risk_sig.confidence:.2f} exec={exec_sig.confidence:.2f}"
-        )
-        return direction, round(confidence, 3), [tech_sig, sent_sig, risk_sig, exec_sig]
-</file>
-
-<file path="config.py">
-"""
-config.py — Central configuration loaded from .env
-All secrets and tunable parameters live here. Never hardcode values.
-"""
-
-import os
-from dotenv import load_dotenv
-
-load_dotenv(override=True)  # .env always takes precedence over shell environment variables
-
-# ─── Exchange ────────────────────────────────────────────────────────────────
-EXCHANGE           = os.getenv("EXCHANGE", "binance")   # "binance" | "kucoin"
-BINANCE_API_KEY    = os.getenv("BINANCE_API_KEY", "")
-BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
-BINANCE_TESTNET    = os.getenv("BINANCE_TESTNET", "false").lower() == "true"
-KUCOIN_API_KEY     = os.getenv("KUCOIN_API_KEY", "")
-KUCOIN_API_SECRET  = os.getenv("KUCOIN_API_SECRET", "")
-KUCOIN_PASSPHRASE  = os.getenv("KUCOIN_PASSPHRASE", "")
-
-# ─── Trading ─────────────────────────────────────────────────────────────────
-TRADING_MODE      = os.getenv("TRADING_MODE", "paper")          # "paper" | "live"
-TRADING_PAIR      = os.getenv("TRADING_PAIR", "BTC/USDT")
-BASE_CURRENCY     = os.getenv("BASE_CURRENCY", "USDT")
-STARTING_CAPITAL  = float(os.getenv("STARTING_CAPITAL", "30"))
-
-# Binance minimum notional for BTC/USDT is ~$5 (min qty 0.00001 BTC).
-# We use $11 per trade to stay safely above minimums while capital is small.
-MIN_ORDER_USDT    = float(os.getenv("MIN_ORDER_USDT", "11"))
-
-# ─── Risk ─────────────────────────────────────────────────────────────────────
-MAX_RISK_PER_TRADE       = float(os.getenv("MAX_RISK_PER_TRADE", "0.005"))   # 0.5%
-MAX_DAILY_LOSS           = float(os.getenv("MAX_DAILY_LOSS", "0.01"))         # 1%
-MAX_CONSECUTIVE_LOSSES   = int(os.getenv("MAX_CONSECUTIVE_LOSSES", "2"))
-MAX_TRADES_PER_DAY       = int(os.getenv("MAX_TRADES_PER_DAY", "2"))
-MAX_DRAWDOWN_KILL_SWITCH = float(os.getenv("MAX_DRAWDOWN_KILL_SWITCH", "0.25"))  # 25% — suitable for accounts under $100; tighten to 0.10 above $200
-COOLDOWN_MINUTES         = int(os.getenv("COOLDOWN_MINUTES", "15"))
-
-# ATR multipliers for dynamic SL / TP
-ATR_STOP_MULT   = float(os.getenv("ATR_STOP_MULT", "1.5"))
-ATR_TARGET_MULT = float(os.getenv("ATR_TARGET_MULT", "2.5"))   # realistic TP on 1h BTC
-
-# Long-only mode: True for spot USDT accounts (cannot short BTC on spot)
-# Set to False only if using futures/margin.
-LONG_ONLY = os.getenv("LONG_ONLY", "true").lower() == "true"
-
-# Volume spike filter: current bar volume must exceed N × 20-bar average
-VOLUME_SPIKE_MIN = float(os.getenv("VOLUME_SPIKE_MIN", "1.2"))  # compared against 50-bar avg, not 20
-
-# ─── Strategy ────────────────────────────────────────────────────────────────
-DATA_UPDATE_INTERVAL  = int(os.getenv("DATA_UPDATE_INTERVAL", "60"))   # seconds
-MIN_CANDLES_REQUIRED  = int(os.getenv("MIN_CANDLES_REQUIRED", "100"))
-ADX_TREND_THRESHOLD   = float(os.getenv("ADX_TREND_THRESHOLD", "25"))  # ADX > 25 = trending
-RSI_TREND_BUY_MIN     = float(os.getenv("RSI_TREND_BUY_MIN",  "55"))   # RSI must clear 55, not just 50
-RSI_TREND_SELL_MAX    = float(os.getenv("RSI_TREND_SELL_MAX", "45"))
-RSI_RANGE_BUY_MAX     = float(os.getenv("RSI_RANGE_BUY_MAX",  "30"))   # genuine oversold
-RSI_RANGE_SELL_MIN    = float(os.getenv("RSI_RANGE_SELL_MIN", "70"))   # genuine overbought
-TIMEFRAME             = os.getenv("TIMEFRAME", "1h")
-
-# ─── Agent weights (must sum to 1.0) ─────────────────────────────────────────
-# Consensus: all agents must agree direction; weights used for confidence score
-AGENT_WEIGHTS = {
-    "technical": float(os.getenv("WEIGHT_TECHNICAL", "0.45")),
-    "sentiment":  float(os.getenv("WEIGHT_SENTIMENT",  "0.15")),
-    "risk":       float(os.getenv("WEIGHT_RISK",       "0.25")),
-    "execution":  float(os.getenv("WEIGHT_EXECUTION",  "0.15")),
-}
-
-# ─── Sentiment RSS feeds (free, no API key needed) ───────────────────────────
-SENTIMENT_FEEDS = [
-    "https://feeds.feedburner.com/CoinDesk",
-    "https://cointelegraph.com/rss",
-    "https://bitcoinmagazine.com/.rss/full/",
-    "https://cryptopotato.com/feed/",
-]
-SENTIMENT_CACHE_SECONDS = int(os.getenv("SENTIMENT_CACHE_SECONDS", "300"))  # 5 min
-
-# ─── Database & Logging ───────────────────────────────────────────────────────
-DB_PATH            = os.getenv("DB_PATH", "data/trading.db")
-LOG_LEVEL          = os.getenv("LOG_LEVEL", "INFO")
-LOG_RETENTION_DAYS = int(os.getenv("LOG_RETENTION_DAYS", "90"))
-LOG_DIR            = "logs"
-
-# ─── Telegram ────────────────────────────────────────────────────────────────
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
-TELEGRAM_ENABLED   = os.getenv("TELEGRAM_ENABLED", "true").lower() == "true"
-
-# ─── Resilience ──────────────────────────────────────────────────────────────
-MAX_RECONNECT_ATTEMPTS = int(os.getenv("MAX_RECONNECT_ATTEMPTS", "10"))
-RECONNECT_BACKOFF_BASE = float(os.getenv("RECONNECT_BACKOFF_BASE", "2.0"))   # seconds
-RECONNECT_BACKOFF_MAX  = float(os.getenv("RECONNECT_BACKOFF_MAX", "120.0"))  # 2 min cap
-
-# ─── Kill switch file (manual override) ──────────────────────────────────────
-KILL_SWITCH_FILE = "ops/kill_switch.json"
-
-# ─── Log management ───────────────────────────────────────────────────────────
-# Optional email delivery for compressed logs (uses Gmail SMTP with app password)
-# Generate an app password at: https://myaccount.google.com/apppasswords
-EMAIL_ADDRESS      = os.getenv("EMAIL_ADDRESS", "")
-EMAIL_APP_PASSWORD = os.getenv("EMAIL_APP_PASSWORD", "")
-EMAIL_RECIPIENT    = os.getenv("EMAIL_RECIPIENT", EMAIL_ADDRESS)  # default: send to self
-# Compress logs older than this many hours (keeps disk usage low on AWS free tier)
-LOG_COMPRESS_AFTER_HOURS = int(os.getenv("LOG_COMPRESS_AFTER_HOURS", "24"))
-</file>
-
-<file path=".gitignore">
-# Environment — NEVER commit
-.env
-.env.local
-
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-.venv/
-venv/
-env/
-
-# Data & logs
-data/trading.db
-data/raw/
-data/processed/
-logs/
-backtest_results/
-ops/kill_switch.json
-
-# macOS
-.DS_Store
-
-# IDE
-.vscode/
-.idea/
-*.swp
-# SSH keys and certificates — NEVER commit
-*.pem
-*.key
-*.key.pub
-</file>
-
 <file path="requirements.txt">
 # Core exchange
 ccxt>=4.3.0
@@ -2570,6 +3922,11 @@ optuna>=3.6.0
 
 # ML signal filter — training only; inference uses pure numpy (#3)
 scikit-learn>=1.4.0
+
+# Terminal dashboard + web dashboard
+rich>=13.0.0
+psutil>=5.9.0
+flask>=3.0.0
 
 # Optional: faster JSON for logs
 ujson>=5.9.0
