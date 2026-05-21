@@ -138,27 +138,23 @@ print(f"  Winner by Sharpe: {winner}")
 <file path="ops/best_params.json">
 {
   "metric": "sharpe",
-  "best_value": 0.64,
+  "best_value": 0.27,
   "n_trials": 100,
   "params": {
-    "rsi_trend_buy_min": 55.2106,
-    "rsi_trend_sell_max": 49.0118,
-    "rsi_range_buy_max": 28.8208,
-    "rsi_range_sell_min": 65.8087,
-    "adx_threshold": 33.97,
-    "atr_stop_mult": 1.8476,
-    "atr_target_mult": 1.966,
-    "volume_spike_min": 1.999
+    "rsi_trend_buy_min": 52.4418,
+    "rsi_range_buy_max": 26.6972,
+    "adx_threshold": 34.6579,
+    "atr_stop_mult": 1.9786,
+    "atr_target_mult": 2.2338,
+    "volume_spike_min": 2.5137
   },
   "env_lines": [
-    "RSI_TREND_BUY_MIN=55.2",
-    "RSI_TREND_SELL_MAX=49.0",
-    "RSI_RANGE_BUY_MAX=28.8",
-    "RSI_RANGE_SELL_MIN=65.8",
-    "ADX_TREND_THRESHOLD=34.0",
-    "ATR_STOP_MULT=1.85",
-    "ATR_TARGET_MULT=1.97",
-    "VOLUME_SPIKE_MIN=2.00"
+    "RSI_TREND_BUY_MIN=52.4",
+    "RSI_RANGE_BUY_MAX=26.7",
+    "ADX_TREND_THRESHOLD=34.7",
+    "ATR_STOP_MULT=1.98",
+    "ATR_TARGET_MULT=2.23",
+    "VOLUME_SPIKE_MIN=2.51"
   ]
 }
 </file>
@@ -2487,6 +2483,40 @@ class SignalFilter:
         return True
 </file>
 
+<file path=".gitignore">
+# Environment — NEVER commit
+.env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Data & logs
+data/trading.db
+data/raw/
+data/processed/
+logs/
+backtest_results/
+ops/kill_switch.json
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+# SSH keys and certificates — NEVER commit
+*.pem
+*.key
+*.key.pub
+</file>
+
 <file path="agents.py">
 """
 agents.py — The 4-agent consensus decision system.
@@ -3111,40 +3141,6 @@ EMAIL_APP_PASSWORD = os.getenv("EMAIL_APP_PASSWORD", "")
 EMAIL_RECIPIENT    = os.getenv("EMAIL_RECIPIENT", EMAIL_ADDRESS)  # default: send to self
 # Compress logs older than this many hours (keeps disk usage low on AWS free tier)
 LOG_COMPRESS_AFTER_HOURS = int(os.getenv("LOG_COMPRESS_AFTER_HOURS", "24"))
-</file>
-
-<file path=".gitignore">
-# Environment — NEVER commit
-.env
-.env.local
-
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-.venv/
-venv/
-env/
-
-# Data & logs
-data/trading.db
-data/raw/
-data/processed/
-logs/
-backtest_results/
-ops/kill_switch.json
-
-# macOS
-.DS_Store
-
-# IDE
-.vscode/
-.idea/
-*.swp
-# SSH keys and certificates — NEVER commit
-*.pem
-*.key
-*.key.pub
 </file>
 
 <file path="bot.py">
@@ -3898,40 +3894,6 @@ if __name__ == "__main__":
     main()
 </file>
 
-<file path="requirements.txt">
-# Core exchange
-ccxt>=4.3.0
-
-# Data & analysis
-pandas>=2.0.0
-numpy>=1.26.0
-
-# Sentiment scraping (no paid APIs)
-feedparser>=6.0.0
-beautifulsoup4>=4.12.0
-requests>=2.31.0
-
-# Environment
-python-dotenv>=1.0.0
-
-# Notifications
-# (uses requests, already listed above)
-
-# Hyperparameter optimization (#1)
-optuna>=3.6.0
-
-# ML signal filter — training only; inference uses pure numpy (#3)
-scikit-learn>=1.4.0
-
-# Terminal dashboard + web dashboard
-rich>=13.0.0
-psutil>=5.9.0
-flask>=3.0.0
-
-# Optional: faster JSON for logs
-ujson>=5.9.0
-</file>
-
 <file path="README.md">
 # Crypto Survival System
 
@@ -4081,6 +4043,40 @@ Walk-forward testing avoids the most common overfitting trap (training and testi
 - The GitHub token (`Crypto_Survival_System_Token`) should have the minimum scopes needed (repo read/write, no org admin)
 - Kill switch file is local — if the MacBook loses power mid-trade in live mode, the position stays open on Binance. Set a manual stop-loss order on Binance separately as a backstop.
 - Live order placement has no confirmation step — this is by design for automation, but double-check `.env` `TRADING_MODE` before running `--live`.
+</file>
+
+<file path="requirements.txt">
+# Core exchange
+ccxt>=4.3.0
+
+# Data & analysis
+pandas>=2.0.0
+numpy>=1.26.0
+
+# Sentiment scraping (no paid APIs)
+feedparser>=6.0.0
+beautifulsoup4>=4.12.0
+requests>=2.31.0
+
+# Environment
+python-dotenv>=1.0.0
+
+# Notifications
+# (uses requests, already listed above)
+
+# Hyperparameter optimization (#1)
+optuna>=3.6.0
+
+# ML signal filter — training only; inference uses pure numpy (#3)
+scikit-learn>=1.4.0
+
+# Terminal dashboard + web dashboard
+rich>=13.0.0
+psutil>=5.9.0
+flask>=3.0.0
+
+# Optional: faster JSON for logs
+ujson>=5.9.0
 </file>
 
 </files>

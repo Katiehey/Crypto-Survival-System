@@ -136,7 +136,7 @@ class WalkForwardBacktester:
         timeframe = timeframe or config.TIMEFRAME
 
         exchange = ccxt.binance({"enableRateLimit": True})
-        since    = exchange.parse8601(
+        since = exchange.parse8601(
             (pd.Timestamp.utcnow() - pd.Timedelta(days=days)).isoformat()
         )
 

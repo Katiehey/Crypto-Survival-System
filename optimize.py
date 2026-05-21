@@ -31,7 +31,7 @@ logger = logging.getLogger("optimize")
 BEST_PARAMS_PATH = Path("ops/best_params.json")
 
 
-def run_optimization(n_trials: int = 100, metric: str = "sharpe", days: int = 730) -> dict | None:
+def run_optimization(n_trials: int = 100, metric: str = "sharpe", days: int = 730):
     try:
         import optuna
         optuna.logging.set_verbosity(optuna.logging.WARNING)
