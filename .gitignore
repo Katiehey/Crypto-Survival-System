@@ -17,6 +17,7 @@ data/processed/
 logs/
 backtest_results/
 ops/kill_switch.json
+repomix-output.xml
 
 # macOS
 .DS_Store

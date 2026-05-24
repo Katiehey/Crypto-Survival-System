@@ -61,8 +61,10 @@ class TechnicalAgent:
             # ── Volume filter ─────────────────────────────────────────────────
             # 50-bar average gives a stable baseline — a 20-bar window gets
             # inflated too quickly by a short burst, making spikes impossible to hit
-            vol_avg   = df["volume"].rolling(50).mean().iloc[-1]
-            vol_spike = df["volume"].iloc[-1] > vol_avg * config.VOLUME_SPIKE_MIN
+            # Use iloc[-2] (last completed bar) — iloc[-1] is the current partial candle
+            # which accumulates volume mid-hour and will always fail the spike check.
+            vol_avg   = df["volume"].rolling(50).mean().iloc[-2]
+            vol_spike = df["volume"].iloc[-2] > vol_avg * config.VOLUME_SPIKE_MIN
 
             # ── RSI (14) ──────────────────────────────────────────────────────
             rsi = self._rsi(close, 14)
@@ -114,7 +116,7 @@ class TechnicalAgent:
             if not vol_spike:
                 # Low-volume bar: any signal here is likely a fake-out — skip it
                 return AgentSignal("technical", "HOLD", 0.5,
-                                   f"Low volume (bar={df['volume'].iloc[-1]:.0f} < {vol_avg*config.VOLUME_SPIKE_MIN:.0f}) — skipping")
+                                   f"Low volume (bar={df['volume'].iloc[-2]:.0f} < {vol_avg*config.VOLUME_SPIKE_MIN:.0f}) — skipping")
 
             if regime == "trending":
                 # Trend-following: all conditions must align including macro trend filter
