@@ -11,13 +11,18 @@ venv/
 env/
 
 # Data & logs
-data/trading.db
-data/raw/
-data/processed/
+*.db
+data/
 logs/
 backtest_results/
+
+# Runtime state
 ops/kill_switch.json
+ops/signal_filter.pkl
+
+# Generated files
 repomix-output.xml
+*.xml
 
 # macOS
 .DS_Store
@@ -26,6 +31,7 @@ repomix-output.xml
 .vscode/
 .idea/
 *.swp
+
 # SSH keys and certificates — NEVER commit
 *.pem
 *.key
