@@ -12,6 +12,7 @@ env/
 
 # Data & logs
 *.db
+*.log
 data/
 logs/
 backtest_results/

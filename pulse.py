@@ -5,18 +5,19 @@ Pings the Oracle server every 10 minutes.
 If the server stops responding, plays an alert sound 3 times.
 
 Usage:
-    python pulse.py
-    python pulse.py --ip 64.181.218.172 --interval 10
+    python pulse.py --ip <your-oracle-ip>
+    python pulse.py --ip <your-oracle-ip> --interval 10
 """
 from __future__ import annotations
 
 import argparse
 import datetime
+import os
 import subprocess
 import sys
 import time
 
-ORACLE_IP = "64.181.218.172"
+ORACLE_IP = os.getenv("ORACLE_IP", "")
 ALERT_SOUND = "/System/Library/Sounds/Basso.aiff"  # built-in macOS alert sound
 
 

@@ -253,6 +253,7 @@ class SentimentAgent:
         self._cache_time: float = 0
 
     def analyse(self) -> AgentSignal:
+        """Score recent crypto headlines and return a directional sentiment signal."""
         try:
             score = self._get_score()
 
@@ -296,6 +297,7 @@ class SentimentAgent:
         return score
 
     def _fetch_headlines(self) -> list[str]:
+        """Pull the latest entry titles from all configured RSS feeds."""
         headlines = []
         for feed_url in config.SENTIMENT_FEEDS:
             try:
@@ -402,6 +404,7 @@ class ExecutionAgent:
     SLIPPAGE_ESTIMATE = 0.0005  # 0.05% conservative estimate
 
     def analyse(self, balance: float, price: float, signal: Signal) -> AgentSignal:
+        """Check fee viability and minimum order size; pass the proposed direction through if feasible."""
         try:
             # Minimum order check
             order_usdt = max(config.MIN_ORDER_USDT, balance * config.MAX_RISK_PER_TRADE)

@@ -65,6 +65,7 @@ logger = logging.getLogger("bot")
 # ─── Database ─────────────────────────────────────────────────────────────────
 
 def init_db(db_path: str = config.DB_PATH):
+    """Create trades and decisions tables if they don't exist yet."""
     conn = sqlite3.connect(db_path)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS trades (
@@ -108,6 +109,7 @@ def init_db(db_path: str = config.DB_PATH):
 
 
 def log_decision(conn, signal, confidence, regime_info, agent_signals, action):
+    """Persist a consensus decision (including all agent details) to the decisions table."""
     agent_json = json.dumps([
         {"agent": a.agent, "signal": a.signal, "confidence": a.confidence, "reason": a.reason}
         for a in agent_signals
@@ -128,6 +130,7 @@ def log_decision(conn, signal, confidence, regime_info, agent_signals, action):
 
 
 def log_trade(conn, trade_data: dict):
+    """Persist a completed trade result to the trades table."""
     entered = trade_data.get("entered_at")
     entered_at_iso = entered.isoformat() if isinstance(entered, datetime) else (entered or "")
     conn.execute(
@@ -157,6 +160,7 @@ def log_trade(conn, trade_data: dict):
 # ─── Telegram notifications ───────────────────────────────────────────────────
 
 def send_telegram(message: str):
+    """Send a plain-text message to the configured Telegram chat. Silently no-ops if disabled or unconfigured."""
     if not config.TELEGRAM_ENABLED:
         return
     if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
@@ -289,6 +293,7 @@ def send_logs(via: str = "telegram") -> bool:
 # ─── Exchange connection with resilience ──────────────────────────────────────
 
 def build_exchange(live: bool = False):
+    """Instantiate and return the ccxt exchange object based on EXCHANGE config."""
     if config.EXCHANGE == "kucoin":
         params = {
             "apiKey":          config.KUCOIN_API_KEY,
@@ -378,6 +383,7 @@ class PaperTradingEngine:
         self.position: dict = {}
 
     def enter(self, signal: str, price: float, size_usdt: float, levels: dict, regime: str = "") -> dict:
+        """Open a simulated position. Returns the position dict, or {} if already in a trade."""
         if self.in_trade:
             return {}
 
@@ -496,6 +502,7 @@ class PaperTradingEngine:
 class TradingBot:
 
     def __init__(self, live_override: bool = False):
+        """Initialise exchange, risk engine, consensus engine, and paper trading state."""
         self.live       = live_override or (config.TRADING_MODE == "live")
         self.exchange   = build_exchange(self.live)
         self.risk       = RiskEngine()
@@ -531,6 +538,7 @@ class TradingBot:
         self._running = False
 
     def run(self):
+        """Block and run the main trading loop until stopped or max errors reached."""
         logger.info("Starting main loop — press Ctrl+C to stop")
         consecutive_errors = 0
         last_log_compress  = datetime.now()
@@ -687,6 +695,7 @@ class TradingBot:
 # ─── CLI entry point ──────────────────────────────────────────────────────────
 
 def main():
+    """CLI entry point — parse arguments and dispatch to the appropriate mode."""
     parser = argparse.ArgumentParser(description="Crypto Survival System Trading Bot")
     parser.add_argument("--live",               action="store_true", help="Override to live trading")
     parser.add_argument("--backtest",           action="store_true", help="Run walk-forward backtest and exit")

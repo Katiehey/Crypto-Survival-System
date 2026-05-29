@@ -620,6 +620,6 @@ def api_data():
 
 if __name__ == "__main__":
     print("Dashboard running → http://localhost:5000")
-    print("From your browser: http://64.181.218.172:5000  (after opening port in Oracle VCN)")
+    print("From your browser: http://<your-oracle-ip>:5000  (after opening port in Oracle VCN)")
     # 0.0.0.0 = reachable from your laptop when running on Oracle
     app.run(host="0.0.0.0", port=5000, debug=False)

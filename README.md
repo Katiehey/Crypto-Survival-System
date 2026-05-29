@@ -1,6 +1,8 @@
 # Crypto Survival System
 
-An algorithmic trading bot for BTC/USDT with a 4-agent consensus engine, adaptive regime detection, and walk-forward backtesting. Deployed on Oracle Cloud, trading live (paper mode) on KuCoin.
+Algorithmic BTC/USDT trading bot — 4-agent consensus, regime detection, walk-forward backtesting, live on Oracle Cloud (KuCoin)
+
+> **Live status:** Currently running in paper trading mode on Oracle Cloud (KuCoin)
 
 ---
 
@@ -94,6 +96,8 @@ Results saved to `ops/best_params.json` with ready-to-paste `.env` lines.
 | Optimization metric | Sharpe ratio |
 | Best Sharpe (walk-forward, out-of-sample) | 0.27 |
 | Validation method | Walk-forward (out-of-sample folds only) |
+
+> Sharpe of 0.27 is an **out-of-sample** result from walk-forward validation — each fold was never seen by the optimizer, so this is a conservative, honest estimate rather than a curve-fitted in-sample number.
 
 ---
 

@@ -38,6 +38,7 @@ class RiskEngine:
     # ─── State snapshot for agents ───────────────────────────────────────────
 
     def state(self) -> dict:
+        """Return a snapshot of current risk metrics for agent consumption."""
         self._maybe_daily_reset()
         return {
             "peak_balance":        self.peak_balance,
@@ -143,6 +144,7 @@ class RiskEngine:
     # ─── Diagnostics ──────────────────────────────────────────────────────────
 
     def summary(self) -> str:
+        """Return a single-line status string suitable for Telegram heartbeats and log lines."""
         drawdown = (self.peak_balance - self.current_balance) / self.peak_balance
         daily_pnl = self.current_balance - self.daily_start_balance
         return (
