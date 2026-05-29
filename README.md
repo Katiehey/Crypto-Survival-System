@@ -6,6 +6,16 @@ Algorithmic BTC/USDT trading bot — 4-agent consensus, regime detection, walk-f
 
 ---
 
+## Screenshots
+
+![Dashboard](dashboard.png)
+*Real-time dashboard — live price, regime detection, signal heat, agent votes, order book depth, and trade history*
+
+![48h Price Chart](chart.png)
+*48-hour BTC/USDT price chart rendered live from KuCoin data*
+
+---
+
 ## What It Does
 
 The bot runs every minute, fetches live OHLCV data from KuCoin, detects the current market regime (trending vs ranging), and only enters a trade when all 4 agents agree on direction.
