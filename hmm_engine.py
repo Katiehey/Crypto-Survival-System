@@ -217,11 +217,15 @@ class HMMRegimeDetector:
             return False
         try:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
+            # Store scaler as raw arrays (version-agnostic across sklearn releases)
             joblib.dump({
-                "model":           self.model,
-                "scaler":          self.scaler,
-                "state_to_regime": self._state_to_regime,
-                "train_time":      self._train_time,
+                "model":            self.model,
+                "scaler_mean":      self.scaler.mean_,
+                "scaler_scale":     self.scaler.scale_,
+                "scaler_var":       self.scaler.var_,
+                "scaler_n_samples": self.scaler.n_samples_seen_,
+                "state_to_regime":  self._state_to_regime,
+                "train_time":       self._train_time,
             }, path)
             logger.info(f"HMM model saved → {path}")
             return True
@@ -240,9 +244,15 @@ class HMMRegimeDetector:
         try:
             data = joblib.load(path)
             self.model            = data["model"]
-            self.scaler           = data["scaler"]
             self._state_to_regime = data["state_to_regime"]
             self._train_time      = data.get("train_time")
+            # Reconstruct scaler from raw arrays — avoids sklearn version mismatch warnings
+            self.scaler = StandardScaler()
+            self.scaler.mean_            = data["scaler_mean"]
+            self.scaler.scale_           = data["scaler_scale"]
+            self.scaler.var_             = data["scaler_var"]
+            self.scaler.n_features_in_   = len(data["scaler_mean"])
+            self.scaler.n_samples_seen_  = data.get("scaler_n_samples", 1)
             logger.info(
                 f"HMM model loaded (trained {self.model_age_days():.0f}d ago, "
                 f"states: {self._state_to_regime})"
