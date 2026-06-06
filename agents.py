@@ -45,13 +45,18 @@ class TechnicalAgent:
         df: pd.DataFrame,
         regime: str,
         df_4h: pd.DataFrame | None = None,
+        live_mode: bool = True,
     ) -> AgentSignal:
         """
-        df     : 1h OHLCV window (open, high, low, close, volume)
-        regime : "trending" | "ranging"
-        df_4h  : optional 4h OHLCV window for multi-timeframe confirmation.
-                 When provided, BUY signals require 4h EMA20 > EMA50 (medium-term
-                 uptrend) and SELL signals require 4h EMA20 < EMA50.
+        df        : 1h OHLCV window (open, high, low, close, volume)
+        regime    : "trending" | "ranging"
+        df_4h     : optional 4h OHLCV window for multi-timeframe confirmation.
+                    When provided, BUY signals require 4h EMA20 > EMA50 (medium-term
+                    uptrend) and SELL signals require 4h EMA20 < EMA50.
+        live_mode : True  → use iloc[-2] for volume (live feed includes the current
+                            incomplete candle at iloc[-1], so iloc[-2] is last completed).
+                    False → use iloc[-1] for volume (backtest data has only completed
+                            candles, so iloc[-1] is already the last completed bar).
         """
         try:
             close = df["close"]
@@ -60,11 +65,13 @@ class TechnicalAgent:
 
             # ── Volume filter ─────────────────────────────────────────────────
             # 50-bar average gives a stable baseline — a 20-bar window gets
-            # inflated too quickly by a short burst, making spikes impossible to hit
-            # Use iloc[-2] (last completed bar) — iloc[-1] is the current partial candle
-            # which accumulates volume mid-hour and will always fail the spike check.
-            vol_avg   = df["volume"].rolling(50).mean().iloc[-2]
-            vol_spike = df["volume"].iloc[-2] > vol_avg * config.VOLUME_SPIKE_MIN
+            # inflated too quickly by a short burst, making spikes impossible to hit.
+            # live_mode=True:  use iloc[-2] — live feed includes the current incomplete
+            #                  candle at iloc[-1], so iloc[-2] is the last completed bar.
+            # live_mode=False: use iloc[-1] — backtest data has only completed candles.
+            vol_idx   = -2 if live_mode else -1
+            vol_avg   = df["volume"].rolling(50).mean().iloc[vol_idx]
+            vol_spike = df["volume"].iloc[vol_idx] > vol_avg * config.VOLUME_SPIKE_MIN
 
             # ── RSI (14) ──────────────────────────────────────────────────────
             rsi = self._rsi(close, 14)
@@ -113,12 +120,11 @@ class TechnicalAgent:
             # but we keep it explicitly for ranging-mode BUY to block bear-market dip catches.
             above_ema200 = last_close > ema200.iloc[-1]
 
-            if not vol_spike:
-                # Low-volume bar: any signal here is likely a fake-out — skip it
-                return AgentSignal("technical", "HOLD", 0.5,
-                                   f"Low volume (bar={df['volume'].iloc[-2]:.0f} < {vol_avg*config.VOLUME_SPIKE_MIN:.0f}) — skipping")
-
             if regime == "trending":
+                # Volume spike required for trend entries — confirms breakout momentum
+                if not vol_spike:
+                    return AgentSignal("technical", "HOLD", 0.5,
+                                       f"Low volume (bar={df['volume'].iloc[vol_idx]:.0f} < {vol_avg*config.VOLUME_SPIKE_MIN:.0f}) — skipping")
                 # Trend-following: all conditions must align including macro trend filter
                 # trend_up = EMA20>EMA50>EMA200, which already implies price > EMA200
                 if (trend_up and macd_cross_up and hist_expanding_up
