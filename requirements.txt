@@ -22,6 +22,10 @@ optuna>=3.6.0
 # ML signal filter — training only; inference uses pure numpy (#3)
 scikit-learn>=1.4.0
 
+# HMM regime detection
+hmmlearn>=0.3.0
+joblib>=1.3.0
+
 # Terminal dashboard + web dashboard
 rich>=13.0.0
 psutil>=5.9.0

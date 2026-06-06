@@ -251,7 +251,7 @@ class WalkForwardBacktester:
                     if len(_slice) >= 50:
                         window_4h = _slice
 
-                tech_signal = self.technical.analyse(window, regime, df_4h=window_4h)
+                tech_signal = self.technical.analyse(window, regime, df_4h=window_4h, live_mode=False)
 
                 if tech_signal.signal in ("BUY", "SELL") and tech_signal.confidence >= 0.6:
                     levels = self.strategy.compute_levels(window, tech_signal.signal, regime)

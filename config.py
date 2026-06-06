@@ -57,6 +57,13 @@ RSI_RANGE_BUY_MAX     = float(os.getenv("RSI_RANGE_BUY_MAX",  "30"))   # genuine
 RSI_RANGE_SELL_MIN    = float(os.getenv("RSI_RANGE_SELL_MIN", "70"))   # genuine overbought
 TIMEFRAME             = os.getenv("TIMEFRAME", "1h")
 
+# ─── HMM Regime Detection ─────────────────────────────────────────────────────
+HMM_ENABLED        = os.getenv("HMM_ENABLED",        "true").lower() == "true"
+HMM_N_REGIMES      = int(os.getenv("HMM_N_REGIMES",     "5"))
+HMM_RETRAIN_DAYS   = int(os.getenv("HMM_RETRAIN_DAYS",  "30"))
+HMM_MIN_CONFIDENCE = float(os.getenv("HMM_MIN_CONFIDENCE", "0.6"))
+HMM_MODEL_PATH     = os.getenv("HMM_MODEL_PATH", "ops/hmm_model.pkl")
+
 # ─── Agent weights (must sum to 1.0) ─────────────────────────────────────────
 # Consensus: all agents must agree direction; weights used for confidence score
 AGENT_WEIGHTS = {

@@ -620,7 +620,27 @@ class TradingBot:
         regime_info = self.regime_det.detect(df)
         regime      = regime_info["regime"]
 
-        # 4. Check open paper trade for exit
+        # 4. HMM regime — crash/bear force-exit longs; euphoria halves position size
+        hmm_regime = regime_info.get("hmm_regime")
+        if hmm_regime in ("crash", "bear"):
+            if self.paper_eng and self.paper_eng.in_trade:
+                exit_result = self.paper_eng.force_exit(close, f"HMM_{hmm_regime.upper()}")
+                if exit_result:
+                    self.risk.record_trade(exit_result["pnl_usdt"])
+                    log_trade(self.db, exit_result)
+                    send_telegram(
+                        f"Position closed — HMM {hmm_regime.upper()} regime\n"
+                        f"{exit_result['signal']} @ {exit_result['exit_price']:.2f}\n"
+                        f"PnL: ${exit_result['pnl_usdt']:+.4f} ({exit_result['pnl_pct']:+.2f}%)\n"
+                        f"{self.risk.summary()}"
+                    )
+            logger.info(
+                f"[HMM] {hmm_regime.upper()} regime "
+                f"(conf={regime_info.get('hmm_confidence', 0):.2f}) — no new entries"
+            )
+            return
+
+        # 5. Check open paper trade for exit (regime flip or SL/TP)
         if self.paper_eng and self.paper_eng.in_trade:
             entry_regime = self.paper_eng.position.get("regime", "")
             if entry_regime and regime != entry_regime:
@@ -637,27 +657,32 @@ class TradingBot:
                     f"{self.risk.summary()}"
                 )
 
-        # 5. Skip entry if already in trade
+        # 6. Skip entry if already in trade
         if (self.paper_eng and self.paper_eng.in_trade) or self.risk.kill_switch:
             return
 
-        # 6. Run 4-agent consensus (+ MTF filter + ML filter)
+        # 7. Run 4-agent consensus (+ MTF filter + ML filter)
         risk_state  = self.risk.state()
         signal, confidence, agent_sigs = self.consensus.decide(
             df, regime, risk_state, balance, close, df_4h=df_4h
         )
 
-        # 7. Log decision
+        # 8. Log decision
+        hmm_label = f" HMM={hmm_regime}({regime_info.get('hmm_confidence', 0):.2f})" if hmm_regime else ""
         log_decision(self.db, signal, confidence, regime_info, agent_sigs, "enter" if signal != "HOLD" else "hold")
         logger.info(
-            f"[TICK] price={close:.2f} regime={regime} ADX={regime_info['adx']} "
-            f"signal={signal} conf={confidence:.2f} | {self.risk.summary()}"
+            f"[TICK] price={close:.2f} regime={regime} ADX={regime_info['adx']}"
+            f"{hmm_label} signal={signal} conf={confidence:.2f} | {self.risk.summary()}"
         )
 
-        # 8. Execute if consensus says go and confidence is sufficient
+        # 9. Execute if consensus says go and confidence is sufficient
         if signal in ("BUY", "SELL") and confidence >= 0.6:
-            levels   = self.strategy.compute_levels(df, signal, regime)
-            size     = self.risk.position_size_usdt()
+            levels = self.strategy.compute_levels(df, signal, regime)
+            # Euphoria: reduce position size by 50% — parabolic moves reverse violently
+            size   = self.risk.position_size_usdt()
+            if hmm_regime == "euphoria":
+                size = size * 0.5
+                logger.info(f"[HMM] EUPHORIA regime — position size halved to ${size:.2f}")
 
             if not self.live and self.paper_eng:
                 self.paper_eng.enter(signal, close, size, levels, regime)
@@ -708,6 +733,10 @@ def main():
                         help="Run backtest, train ML signal filter, save to ops/signal_filter.pkl")
     parser.add_argument("--train-filter-days",  type=int, default=600,
                         help="Days of history for ML filter training (default: 600)")
+    parser.add_argument("--train-hmm",          action="store_true",
+                        help="Train HMM regime detector on historical data, save to ops/hmm_model.pkl")
+    parser.add_argument("--train-hmm-days",     type=int, default=730,
+                        help="Days of history for HMM training (default: 730)")
     args = parser.parse_args()
 
     if args.toggle_kill_switch:
@@ -739,6 +768,24 @@ def main():
             print(f"ML filter trained on {len(features_list)} trades — saved to ops/signal_filter.pkl")
         else:
             print("Training failed — see logs above for details")
+        return
+
+    if args.train_hmm:
+        from backtest import WalkForwardBacktester
+        from hmm_engine import HMMRegimeDetector
+        print(f"Training HMM on {args.train_hmm_days} days of BTC/USDT 1h data …")
+        bt  = WalkForwardBacktester()
+        df  = bt.fetch_historical(days=args.train_hmm_days, timeframe="1h")
+        hmm = HMMRegimeDetector()
+        ok  = hmm.fit(df)
+        if ok:
+            hmm.save_model()
+            print("HMM trained → ops/hmm_model.pkl")
+            print("Generating regime chart …")
+            hmm.plot_regimes(df, save_path="ops/hmm_regimes.png")
+            print("Chart saved → ops/hmm_regimes.png")
+        else:
+            print("HMM training failed — see logs above")
         return
 
     if args.backtest:
