@@ -84,6 +84,7 @@ def fetch_data() -> dict[str, Any]:
         "price_impact_pct": 0, "depth_ok": True,
         "cpu_pct": 0, "ram_used_mb": 0, "ram_total_mb": 0,
         "last_updated": "—", "uptime": "00:00:00", "error": "",
+        "hmm_regime": "", "hmm_confidence": 0.0, "hmm_fallback": True,
     }
 
     try:
@@ -124,6 +125,9 @@ def fetch_data() -> dict[str, Any]:
         d["adx"]      = ri["adx"]
         d["plus_di"]  = ri["plus_di"]
         d["minus_di"] = ri["minus_di"]
+        d["hmm_regime"]     = ri.get("hmm_regime") or ""
+        d["hmm_confidence"] = ri.get("hmm_confidence", 0.0)
+        d["hmm_fallback"]   = ri.get("hmm_fallback", True)
 
         d["rsi_threshold"] = (
             config.RSI_RANGE_BUY_MAX if d["regime"] == "ranging"
@@ -248,6 +252,7 @@ HTML = """<!DOCTYPE html>
   <span class="fs-5" id="price-change">—</span>
   <span id="regime-badge">—</span>
   <span class="g-dim" id="adx-val" style="font-size:.8rem">ADX —</span>
+  <span id="hmm-header-badge" style="font-size:.78rem"></span>
   <span class="ms-auto d-flex align-items-center gap-2">
     <span class="pulse-dot" id="pulse-dot"></span>
     <span class="g-dim" id="last-updated" style="font-size:.78rem">—</span>
@@ -444,6 +449,22 @@ function agentCard(ok, label, detail) {
     </div></div>`;
 }
 
+function hmmCard(regime, conf, fallback) {
+  const cols = { crash:'#8b0000', bear:'#cd5c5c', neutral:'#4a5568', bull:'#2d6a4f', euphoria:'#f6c90e' };
+  const icons = { crash:'🔴', bear:'🟠', neutral:'⚪', bull:'🟢', euphoria:'🟡' };
+  const r   = regime || '';
+  const col = cols[r]  || '#30363d';
+  const ico = icons[r] || '❔';
+  const blocked = r === 'crash' || r === 'bear';
+  const detail  = fallback ? 'ADX fallback' : `conf ${(conf * 100).toFixed(0)}%` + (r === 'euphoria' ? ' · ½ size' : '');
+  return `<div class="col-6 mb-1">
+    <div class="d-flex align-items-center gap-1 p-1 rounded" style="background:${col}22;border:1px solid ${col}">
+      <span style="font-size:.85rem">${blocked ? '🚫' : (r === 'euphoria' ? '⚠️' : '✅')}</span>
+      <div><div style="font-size:.75rem;font-weight:600;color:${col}">${ico} HMM ${r ? r.toUpperCase() : '—'}</div>
+      <div style="font-size:.68rem;color:#8b949e">${detail}</div></div>
+    </div></div>`;
+}
+
 // ── Main render ─────────────────────────────────────────────────────────────
 function render(d) {
   // Price header
@@ -455,6 +476,12 @@ function render(d) {
   $('regime-badge').innerHTML =
     `<span class="badge" style="background:${rc}22;color:${rc};border:1px solid ${rc}">${d.regime.toUpperCase()}</span>`;
   $('adx-val').textContent = 'ADX ' + d.adx.toFixed(1);
+  // HMM header badge
+  const hmmCols = { crash:'#8b0000', bear:'#cd5c5c', neutral:'#4a5568', bull:'#2d6a4f', euphoria:'#f6c90e' };
+  const hc = hmmCols[d.hmm_regime] || '#30363d';
+  $('hmm-header-badge').innerHTML = d.hmm_regime
+    ? `<span style="background:${hc}22;color:${hc};border:1px solid ${hc};border-radius:4px;padding:1px 6px">${d.hmm_regime.toUpperCase()} ${d.hmm_fallback ? '(ADX)' : (d.hmm_confidence*100).toFixed(0)+'%'}</span>`
+    : '';
   $('last-updated').textContent = 'Updated ' + d.last_updated;
   $('error-msg').textContent = d.error || '';
 
@@ -464,7 +491,27 @@ function render(d) {
   $('regime-heat-badge').style.color  = isRanging ? '#58a6ff' : '#e3b341';
   $('regime-heat-badge').style.background = isRanging ? '#58a6ff22' : '#e3b34122';
 
+  // HMM regime section at top of heat card
   let heat = '';
+  if (d.hmm_regime) {
+    const hcol  = hmmCols[d.hmm_regime] || '#30363d';
+    const confPct = d.hmm_fallback ? 0 : Math.round(d.hmm_confidence * 100);
+    const blocked = d.hmm_regime === 'crash' || d.hmm_regime === 'bear';
+    const hmmNote = blocked ? '🚫 No new entries — force exit longs'
+                  : d.hmm_regime === 'euphoria' ? '⚠️ Parabolic move — position size halved'
+                  : d.hmm_fallback ? 'ADX fallback (confidence too low)'
+                  : '✅ Entries permitted';
+    heat += `<div class="mb-3 p-2 rounded" style="background:${hcol}18;border:1px solid ${hcol}55">
+      <div class="d-flex justify-content-between align-items-center">
+        <span style="font-size:.8rem;font-weight:700;color:${hcol}">HMM: ${d.hmm_regime.toUpperCase()}</span>
+        <span style="font-size:.7rem;color:#8b949e">${d.hmm_fallback ? 'ADX fallback' : 'conf ' + confPct + '%'}</span>
+      </div>
+      <div class="progress mt-1" style="height:3px;background:#21262d">
+        <div style="width:${confPct}%;height:3px;background:${hcol};border-radius:2px"></div>
+      </div>
+      <div style="font-size:.68rem;color:#8b949e;margin-top:4px">${hmmNote}</div>
+    </div>`;
+  }
   if (isRanging) {
     const rsiPct = Math.max(0, (50 - d.rsi) / (50 - d.rsi_threshold) * 100);
     heat += heatRow('RSI → ' + d.rsi_threshold + ' (falling)', rsiPct, d.rsi.toFixed(1));
@@ -504,7 +551,8 @@ function render(d) {
     agentCard(volOk,  'Volume',     d.vol_ratio.toFixed(2) + 'x (need ' + d.vol_threshold + 'x)') +
     agentCard(mtfOk,  '4h MTF',    mtfOk ? 'Bullish aligned' : 'Bearish — blocked') +
     agentCard(riskOk, 'Risk',       'DD=' + d.drawdown_pct.toFixed(1) + '%') +
-    agentCard(false,  'ML Filter',  '⚪ bypass (<200 trades)');
+    agentCard(false,  'ML Filter',  '⚪ bypass (<200 trades)') +
+    hmmCard(d.hmm_regime, d.hmm_confidence, d.hmm_fallback);
 
   // Signal orb
   const met = [techOk, volOk, mtfOk, riskOk].filter(Boolean).length;
