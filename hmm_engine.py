@@ -331,7 +331,7 @@ class HMMRegimeDetector:
 
         # Group consecutive identical regimes into background spans
         regime_arr = np.array(regimes)
-        change_pts = np.where(np.diff(regime_arr, prepend="") != 0)[0]
+        change_pts = np.where(np.concatenate([[True], regime_arr[1:] != regime_arr[:-1]]))[0]
         change_pts = np.append(change_pts, len(regime_arr))
         for start, end in zip(change_pts[:-1], change_pts[1:]):
             ax.axvspan(
