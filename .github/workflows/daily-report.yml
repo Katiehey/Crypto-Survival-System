@@ -1,0 +1,97 @@
+name: Daily Bot Report
+
+on:
+  schedule:
+    - cron: "0 5 * * *"  # 7am SAST (UTC+2)
+  workflow_dispatch:       # allow manual trigger
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/oracle.key
+          chmod 600 ~/.ssh/oracle.key
+          ssh-keyscan -H 64.181.218.172 >> ~/.ssh/known_hosts
+
+      - name: Pull bot logs from Oracle
+        id: logs
+        run: |
+          RAW=$(ssh -i ~/.ssh/oracle.key -o StrictHostKeyChecking=no opc@64.181.218.172 \
+            "tmux capture-pane -t crypto-survival-system:bot -p | tail -100")
+          echo "$RAW" > /tmp/bot_logs.txt
+
+      - name: Parse and send report
+        run: |
+          python3 << 'EOF'
+          import re, os, urllib.request, urllib.parse, json
+          from datetime import datetime, timezone
+
+          with open("/tmp/bot_logs.txt") as f:
+              raw = f.read()
+
+          # Parse latest TICK line
+          ticks = re.findall(r'\[TICK\] (.+)', raw)
+          if not ticks:
+              msg = "⚠️ Daily Report — No tick data found. Bot may be down."
+          else:
+              last = ticks[-1]
+              price     = re.search(r'price=([\d.]+)', last)
+              regime    = re.search(r'regime=(\w+)', last)
+              hmm       = re.search(r'HMM=(\w+)\(([\d.]+)\)', last)
+              balance   = re.search(r'Balance=\$([\d.]+)', last)
+              drawdown  = re.search(r'Drawdown=([\d.]+)%', last)
+              daily_pnl = re.search(r'DailyPnL=\$([+-][\d.]+)', last)
+              trades    = re.search(r'Trades=(\d+)/(\d+)', last)
+              kill      = re.search(r'KillSwitch=(\w+)', last)
+
+              # HMM regime distribution over last 24h
+              hmm_counts = {}
+              for t in ticks:
+                  m = re.search(r'HMM=(\w+)\(', t)
+                  if m:
+                      r = m.group(1)
+                      hmm_counts[r] = hmm_counts.get(r, 0) + 1
+              total_ticks = len(ticks)
+              hmm_lines = "\n".join(
+                  f"  {k}: {v} ({v*100//total_ticks}%)"
+                  for k, v in sorted(hmm_counts.items(), key=lambda x: -x[1])
+              ) or "  (no HMM data)"
+
+              # Volume blocks
+              vol_blocks = raw.count("Low volume")
+              holds = raw.count("signal=HOLD")
+
+              kill_status = "🔴 ON" if kill and kill.group(1) == "True" else "✅ OFF"
+
+              msg = f"""📊 Daily Bot Report — {datetime.now(timezone.utc).strftime('%Y-%m-%d')} 7am SAST
+
+Price: ${float(price.group(1)):,.0f} | Regime: {regime.group(1) if regime else '?'}
+HMM: {hmm.group(1) + ' (' + str(int(float(hmm.group(2))*100)) + '%)' if hmm else '?'}
+Balance: ${balance.group(1) if balance else '?'} | Daily PnL: ${daily_pnl.group(1) if daily_pnl else '0'}
+Drawdown: {drawdown.group(1) if drawdown else '0'}% | Kill switch: {kill_status}
+Trades today: {trades.group(1) if trades else '0'}/{trades.group(2) if trades else '5'}
+
+HMM regime (last {total_ticks} ticks):
+{hmm_lines}
+
+Volume blocks: {vol_blocks} | HOLDs: {holds}"""
+
+          token   = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat_id = os.environ["TELEGRAM_CHAT_ID"]
+          url = f"https://api.telegram.org/bot{token}/sendMessage"
+          data = urllib.parse.urlencode({
+              "chat_id": chat_id,
+              "text": msg,
+              "parse_mode": ""
+          }).encode()
+          urllib.request.urlopen(url, data)
+          print("Sent:", msg)
+          EOF
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
