@@ -2,7 +2,7 @@ name: Daily Bot Report
 
 on:
   schedule:
-    - cron: "0 5 * * *"  # 7am SAST (UTC+2)
+    - cron: "0 5 * * *"  # 7am SAST (UTC+2) — runs on GitHub, MacBook not needed
   workflow_dispatch:       # allow manual trigger
 
 jobs:
