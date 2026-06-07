@@ -2,8 +2,8 @@ name: Weekly Bot Optimizer
 
 on:
   schedule:
-    - cron: "0 8 * * 1"  # Monday 10am SAST (UTC+2)
-  workflow_dispatch:       # allow manual trigger
+    - cron: "0 8 * * 1"  # Monday 10am SAST (UTC+2) — runs on GitHub, MacBook not needed
+  workflow_dispatch:
 
 jobs:
   optimize:
@@ -11,7 +11,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Checkout codebase
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -30,68 +30,24 @@ jobs:
           chmod 600 ~/.ssh/oracle.key
           ssh-keyscan -H 64.181.218.172 >> ~/.ssh/known_hosts
 
-      - name: Pull logs and current params from Oracle
-        id: oracle
+      - name: Pull logs and params from Oracle
         run: |
           ssh -i ~/.ssh/oracle.key -o StrictHostKeyChecking=no opc@64.181.218.172 \
             "tmux capture-pane -t crypto-survival-system:bot -p | tail -500" > /tmp/tick_logs.txt
-
           ssh -i ~/.ssh/oracle.key -o StrictHostKeyChecking=no opc@64.181.218.172 \
             "grep 'VOLUME_SPIKE_MIN\|RSI_RANGE_BUY_MAX\|RSI_TREND_BUY_MIN\|ADX_TREND_THRESHOLD' /home/opc/.env" > /tmp/oracle_params.txt
-
-          cat /tmp/tick_logs.txt
-          echo "---PARAMS---"
-          cat /tmp/oracle_params.txt
 
       - name: Analyse blockers
         id: analysis
         run: |
-          python3 << 'EOF'
-          import re
-
-          with open("/tmp/tick_logs.txt") as f:
-              logs = f.read()
-          with open("/tmp/oracle_params.txt") as f:
-              params = f.read()
-
-          # Count blockers
-          vol_blocks = len(re.findall(r'Low volume', logs))
-          rsi_blocks = len(re.findall(r'RSI.*skipping|skipping.*RSI', logs, re.IGNORECASE))
-          mtf_blocks = len(re.findall(r'4h|bearish.*blocked|MTF', logs, re.IGNORECASE))
-          total_blocks = vol_blocks + rsi_blocks + mtf_blocks
-          ticks = len(re.findall(r'\[TICK\]', logs))
-
-          # Current params
-          vol_min = re.search(r'VOLUME_SPIKE_MIN=([\d.]+)', params)
-          current_vol = float(vol_min.group(1)) if vol_min else 1.5
-
-          print(f"TICKS={ticks}")
-          print(f"VOL_BLOCKS={vol_blocks}")
-          print(f"RSI_BLOCKS={rsi_blocks}")
-          print(f"MTF_BLOCKS={mtf_blocks}")
-          print(f"TOTAL_BLOCKS={total_blocks}")
-          print(f"CURRENT_VOL={current_vol}")
-
-          if total_blocks == 0:
-              print("DECISION=none")
-              print("REASON=No blocks found — not enough data")
-          elif total_blocks > 0 and vol_blocks / total_blocks > 0.6:
-              proposed = max(0.8, round(current_vol - 0.2, 1))
-              print(f"DECISION=VOLUME_SPIKE_MIN")
-              print(f"PROPOSED={proposed}")
-              print(f"REASON=Volume filter blocked {vol_blocks}/{total_blocks} entries ({vol_blocks*100//total_blocks}%)")
-          elif total_blocks > 0 and mtf_blocks / total_blocks > 0.4:
-              print("DECISION=none")
-              print("REASON=4h MTF is bearish — market condition, not a parameter problem")
-          else:
-              print("DECISION=none")
-              print("REASON=No clear parameter problem found")
-          EOF
+          python3 .github/scripts/analyse_blockers.py | tee /tmp/analysis.txt
+          echo "decision=$(grep '^DECISION=' /tmp/analysis.txt | cut -d= -f2)" >> $GITHUB_OUTPUT
+          echo "proposed=$(grep '^PROPOSED=' /tmp/analysis.txt | cut -d= -f2)" >> $GITHUB_OUTPUT
+          echo "current_vol=$(grep '^CURRENT_VOL=' /tmp/analysis.txt | cut -d= -f2)" >> $GITHUB_OUTPUT
 
       - name: Run baseline backtest
-        id: baseline
-        run: |
-          python bot.py --backtest --backtest-days 400 2>&1 | tee /tmp/baseline.txt
+        if: steps.analysis.outputs.decision != 'none'
+        run: python bot.py --backtest --backtest-days 400 2>&1 | tee /tmp/baseline.txt
         env:
           BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
           BINANCE_API_SECRET: ${{ secrets.BINANCE_API_SECRET }}
@@ -102,9 +58,8 @@ jobs:
           LOG_LEVEL: WARNING
 
       - name: Run proposed backtest
-        id: proposed
-        run: |
-          VOLUME_SPIKE_MIN=1.3 python bot.py --backtest --backtest-days 400 2>&1 | tee /tmp/proposed.txt
+        if: steps.analysis.outputs.decision != 'none'
+        run: python bot.py --backtest --backtest-days 400 2>&1 | tee /tmp/proposed.txt
         env:
           BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
           BINANCE_API_SECRET: ${{ secrets.BINANCE_API_SECRET }}
@@ -113,80 +68,32 @@ jobs:
           TIMEFRAME: 1h
           STARTING_CAPITAL: "30"
           LOG_LEVEL: WARNING
+          VOLUME_SPIKE_MIN: ${{ steps.analysis.outputs.proposed }}
 
       - name: Send Telegram proposal
+        if: steps.analysis.outputs.decision != 'none'
+        run: python3 .github/scripts/send_optimizer_proposal.py
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CURRENT_VOL: ${{ steps.analysis.outputs.current_vol }}
+          PROPOSED_VOL: ${{ steps.analysis.outputs.proposed }}
+
+      - name: Send no-change report
+        if: steps.analysis.outputs.decision == 'none'
         run: |
-          python3 << 'EOF'
-          import re, os, urllib.request, urllib.parse
+          REASON=$(grep '^REASON=' /tmp/analysis.txt | cut -d= -f2-)
+          python3 -c "
+          import os, urllib.request, urllib.parse
           from datetime import datetime, timezone
-
-          def parse_backtest(path):
-              try:
-                  with open(path) as f:
-                      text = f.read()
-                  sharpe   = re.search(r'Sharpe Ratio:\s+([+-]?[\d.]+)', text)
-                  dd       = re.search(r'Max Drawdown:\s+([\d.]+)', text)
-                  wr       = re.search(r'Win Rate:\s+([\d.]+)', text)
-                  trades   = re.search(r'Total Trades:\s+(\d+)', text)
-                  ret      = re.search(r'Total Return:\s+([+-]?[\d.]+)', text)
-                  return {
-                      "sharpe":  float(sharpe.group(1)) if sharpe else 0,
-                      "dd":      float(dd.group(1))     if dd     else 0,
-                      "wr":      float(wr.group(1))     if wr     else 0,
-                      "trades":  int(trades.group(1))   if trades else 0,
-                      "ret":     float(ret.group(1))    if ret    else 0,
-                  }
-              except Exception as e:
-                  return {"sharpe": 0, "dd": 0, "wr": 0, "trades": 0, "ret": 0, "error": str(e)}
-
-          b = parse_backtest("/tmp/baseline.txt")
-          p = parse_backtest("/tmp/proposed.txt")
-
-          date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-          # Auto-reject if Sharpe drops or drawdown increases by >2%
-          if p["sharpe"] < b["sharpe"] or p["dd"] > b["dd"] + 2:
-              msg = f"""🔧 Bot Optimizer — {date}
-
-PROBLEM: Volume filter blocking most entries.
-PROPOSED: VOLUME_SPIKE_MIN 1.5 → 1.3
-
-❌ AUTO-REJECTED
-Backtest Sharpe would drop: {b['sharpe']:.2f} → {p['sharpe']:.2f}
-No change applied. Bot parameters unchanged."""
-          else:
-              sharpe_delta = p["sharpe"] - b["sharpe"]
-              assessment = (
-                  "Modest improvement — worth applying." if sharpe_delta > 0.1
-                  else "No meaningful improvement. Skipping recommended."
-              )
-              msg = f"""🔧 Bot Optimizer — {date}
-
-PROBLEM: Volume filter blocking most entries.
-PROPOSED: VOLUME_SPIKE_MIN 1.5 → 1.3
-
-BACKTEST (400 days, walk-forward):
-         Before   After
-Sharpe:  {b['sharpe']:.2f}     {p['sharpe']:.2f}
-Trades:  {b['trades']}        {p['trades']}
-Max DD:  {b['dd']:.1f}%    {p['dd']:.1f}%
-Win rate:{b['wr']:.1f}%    {p['wr']:.1f}%
-Return:  {b['ret']:.1f}%    {p['ret']:.1f}%
-
-ASSESSMENT: {assessment}
-
-Reply YES to apply, NO to skip."""
-
-          token   = os.environ["TELEGRAM_BOT_TOKEN"]
-          chat_id = os.environ["TELEGRAM_CHAT_ID"]
-          url = f"https://api.telegram.org/bot{token}/sendMessage"
-          data = urllib.parse.urlencode({
-              "chat_id": chat_id,
-              "text": msg,
-          }).encode()
+          date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+          msg = f'Bot Optimizer - {date}\n\nNo parameter change needed.\n$REASON'
+          token = os.environ['TELEGRAM_BOT_TOKEN']
+          chat_id = os.environ['TELEGRAM_CHAT_ID']
+          url = f'https://api.telegram.org/bot{token}/sendMessage'
+          data = urllib.parse.urlencode({'chat_id': chat_id, 'text': msg}).encode()
           urllib.request.urlopen(url, data)
-          print("Sent.")
-          EOF
+          "
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
