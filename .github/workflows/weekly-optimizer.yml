@@ -32,9 +32,15 @@ jobs:
 
       - name: Pull logs and params from Oracle
         run: |
-          # Pull last 7 days of log files (bot writes logs/bot_YYYYMMDD.log)
+          # Debug: show log directory structure
+          echo "=== Oracle log files ==="
           ssh -i ~/.ssh/oracle.key -o StrictHostKeyChecking=no opc@64.181.218.172 \
-            "find /home/opc/crypto-survival-system/logs -name 'bot_*.log' -mtime -7 -exec tail -n +1 {} \; 2>/dev/null || echo ''" > /tmp/tick_logs.txt
+            "find /home/opc -name 'bot_*.log' 2>/dev/null | head -20; echo '--- also checking ---'; ls /home/opc/ 2>/dev/null"
+
+          # Pull last 7 days of log files from all possible locations
+          ssh -i ~/.ssh/oracle.key -o StrictHostKeyChecking=no opc@64.181.218.172 \
+            "find /home/opc -name 'bot_*.log' -mtime -7 2>/dev/null | xargs cat 2>/dev/null || echo ''" > /tmp/tick_logs.txt
+
           ssh -i ~/.ssh/oracle.key -o StrictHostKeyChecking=no opc@64.181.218.172 \
             "grep 'VOLUME_SPIKE_MIN\|RSI_RANGE_BUY_MAX\|RSI_TREND_BUY_MIN\|ADX_TREND_THRESHOLD' /home/opc/.env" > /tmp/oracle_params.txt
           echo "Log lines pulled: $(wc -l < /tmp/tick_logs.txt)"
