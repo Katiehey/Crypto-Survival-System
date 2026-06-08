@@ -1,0 +1,13 @@
+name: Test KuCoin Access
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test KuCoin public OHLCV
+        run: |
+          curl -s "https://api.kucoin.com/api/v1/market/candles?type=1hour&symbol=BTC-USDT&startAt=1748736000&endAt=1748822400" \
+            | python3 -c "import json,sys; d=json.load(sys.stdin); print('OK, candles:', len(d.get('data',[]))) if d.get('code')=='200000' else print('FAIL:', d)"
