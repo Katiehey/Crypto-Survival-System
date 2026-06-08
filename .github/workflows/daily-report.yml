@@ -23,8 +23,10 @@ jobs:
 
       - name: Pull bot logs from Oracle
         run: |
+          # Pull today's and yesterday's log files from /home/opc/logs/
           ssh -i ~/.ssh/oracle.key -o StrictHostKeyChecking=no opc@64.181.218.172 \
-            "tmux capture-pane -t crypto-survival-system:bot -p | tail -100" > /tmp/bot_logs.txt
+            "find /home/opc/logs -name 'bot_*.log' -mtime -2 2>/dev/null | sort | xargs cat 2>/dev/null || echo ''" > /tmp/bot_logs.txt
+          echo "Log lines: $(wc -l < /tmp/bot_logs.txt)"
 
       - name: Send Telegram report
         run: python3 .github/scripts/daily_report.py
