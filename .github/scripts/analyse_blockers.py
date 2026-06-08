@@ -25,9 +25,12 @@ print(f"MTF_BLOCKS={mtf_blocks}")
 print(f"TOTAL_BLOCKS={total_blocks}")
 print(f"CURRENT_VOL={current_vol}")
 
-if total_blocks == 0:
+if ticks < 50:
     print("DECISION=none")
-    print("REASON=No blocks found — not enough data")
+    print(f"REASON=Only {ticks} ticks found — need 50+ to analyse (bot may have restarted recently)")
+elif total_blocks == 0:
+    print("DECISION=none")
+    print("REASON=No blocks found — bot is passing all filters, parameters look good")
 elif vol_blocks / max(total_blocks, 1) > 0.6:
     proposed = max(0.8, round(current_vol - 0.2, 1))
     print("DECISION=VOLUME_SPIKE_MIN")
