@@ -130,32 +130,39 @@ class WalkForwardBacktester:
         days: int = 400,
     ) -> pd.DataFrame:
         """
-        Fetch historical OHLCV from Binance (public endpoint, no API key needed).
+        Fetch historical OHLCV from KuCoin (public endpoint, no API key, no geo-block).
+        Falls back to Binance if KuCoin fails.
         """
         symbol    = symbol    or config.TRADING_PAIR
         timeframe = timeframe or config.TIMEFRAME
 
-        exchange = ccxt.binance({"enableRateLimit": True})
-        since = exchange.parse8601(
-            (pd.Timestamp.utcnow() - pd.Timedelta(days=days)).isoformat()
-        )
+        for exchange_id in ("kucoin", "binance"):
+            try:
+                exchange = getattr(ccxt, exchange_id)({"enableRateLimit": True})
+                since = exchange.parse8601(
+                    (pd.Timestamp.utcnow() - pd.Timedelta(days=days)).isoformat()
+                )
+                logger.info(f"Fetching {days} days of {symbol} {timeframe} from {exchange_id}…")
+                all_ohlcv = []
+                while True:
+                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=1000)
+                    if not ohlcv:
+                        break
+                    all_ohlcv.extend(ohlcv)
+                    since = ohlcv[-1][0] + 1
+                    if len(ohlcv) < 1000:
+                        break
+                if not all_ohlcv:
+                    raise ValueError("No candles returned")
+                df = pd.DataFrame(all_ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
+                df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+                df = df.set_index("timestamp").drop_duplicates()
+                logger.info(f"Fetched {len(df)} candles ({df.index[0]} → {df.index[-1]})")
+                return df
+            except Exception as e:
+                logger.warning(f"{exchange_id} fetch failed: {e} — trying next source")
 
-        logger.info(f"Fetching {days} days of {symbol} {timeframe} from Binance…")
-        all_ohlcv = []
-        while True:
-            ohlcv = exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=1000)
-            if not ohlcv:
-                break
-            all_ohlcv.extend(ohlcv)
-            since = ohlcv[-1][0] + 1
-            if len(ohlcv) < 1000:
-                break
-
-        df = pd.DataFrame(all_ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
-        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
-        df = df.set_index("timestamp").drop_duplicates()
-        logger.info(f"Fetched {len(df)} candles ({df.index[0]} → {df.index[-1]})")
-        return df
+        raise RuntimeError("All data sources failed (KuCoin + Binance)")
 
     # ─── Internal ─────────────────────────────────────────────────────────────
 
