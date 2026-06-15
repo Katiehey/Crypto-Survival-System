@@ -15,16 +15,39 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import base64
+import functools
+import os
+
 import ccxt
 import pandas as pd
 import psutil
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request, Response
 
 import config
 from strategy import RegimeDetector
 
 app = Flask(__name__)
 _start_time = time.monotonic()
+
+_DASH_USER = os.getenv("DASHBOARD_USER", "admin")
+_DASH_PASS = os.getenv("DASHBOARD_PASS", "")
+
+def _require_auth(f):
+    @functools.wraps(f)
+    def wrapper(*args, **kwargs):
+        if not _DASH_PASS:
+            return f(*args, **kwargs)
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Basic "):
+            try:
+                user, pw = base64.b64decode(auth[6:]).decode().split(":", 1)
+                if user == _DASH_USER and pw == _DASH_PASS:
+                    return f(*args, **kwargs)
+            except Exception:
+                pass
+        return Response("Unauthorized", 401, {"WWW-Authenticate": 'Basic realm="Crypto Dashboard"'})
+    return wrapper
 _cache: dict = {}
 _cache_ts: float = 0.0
 CACHE_TTL = 25  # seconds — refresh faster than the 30s JS poll
@@ -74,7 +97,7 @@ def fetch_data() -> dict[str, Any]:
         "drawdown_threshold": config.MAX_DRAWDOWN_KILL_SWITCH * 100,
         "balance": config.STARTING_CAPITAL, "peak": config.STARTING_CAPITAL,
         "drawdown_pct": 0, "daily_pnl": 0,
-        "trades_today": 0, "total_trades": 0,
+        "trades_today": 0, "max_trades_per_day": config.MAX_TRADES_PER_DAY, "total_trades": 0,
         "win_trades": 0, "loss_trades": 0,
         "win_rate": 0, "profit_factor": 0,
         "best_trade": 0, "worst_trade": 0,
@@ -579,7 +602,7 @@ function render(d) {
   $('peak').textContent        = '$' + d.peak.toFixed(2);
   $('drawdown').innerHTML      = `<span style="color:${d.drawdown_pct>10?'#f85149':'#3fb950'}">${d.drawdown_pct.toFixed(2)}%</span>`;
   $('daily-pnl').innerHTML     = `<span style="color:${d.daily_pnl>=0?'#3fb950':'#f85149'}">${d.daily_pnl>=0?'+':''}$${Math.abs(d.daily_pnl).toFixed(4)}</span>`;
-  $('trades-today').textContent  = d.trades_today + ' / 2';
+  $('trades-today').textContent  = d.trades_today + ' / ' + d.max_trades_per_day;
   $('total-trades').textContent  = d.total_trades;
   $('win-rate').textContent      = d.total_trades > 0 ? d.win_rate + '%' : '—';
   $('profit-factor').textContent = d.total_trades > 0 ? d.profit_factor : '—';
@@ -656,10 +679,12 @@ setInterval(poll, 30000);
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
 @app.route("/")
+@_require_auth
 def index():
     return HTML
 
 @app.route("/api/data")
+@_require_auth
 def api_data():
     return jsonify(fetch_data())
 
