@@ -19,13 +19,13 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_KEY }}" > ~/.ssh/oracle.key
           chmod 600 ~/.ssh/oracle.key
-          ssh-keyscan -H 64.181.218.172 >> ~/.ssh/known_hosts
+          ssh-keyscan -H 35.224.172.19 >> ~/.ssh/known_hosts
 
-      - name: Pull bot logs from Oracle
+      - name: Pull bot logs from GCP
         run: |
-          # Pull today's and yesterday's log files from /home/opc/logs/
-          ssh -i ~/.ssh/oracle.key -o StrictHostKeyChecking=no opc@64.181.218.172 \
-            "find /home/opc/logs -name 'bot_*.log' -mtime -2 2>/dev/null | sort | xargs cat 2>/dev/null || echo ''" > /tmp/bot_logs.txt
+          # Pull today's and yesterday's log files from GCP
+          ssh -i ~/.ssh/oracle.key -o StrictHostKeyChecking=no admin@35.224.172.19 \
+            "find /home/admin/Crypto-Survival-System/logs -name 'bot_*.log' -mtime -2 2>/dev/null | sort | xargs cat 2>/dev/null || echo ''" > /tmp/bot_logs.txt
           echo "Log lines: $(wc -l < /tmp/bot_logs.txt)"
 
       - name: Send Telegram report
