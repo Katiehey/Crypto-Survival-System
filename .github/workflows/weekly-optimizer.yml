@@ -28,14 +28,14 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_KEY }}" > ~/.ssh/oracle.key
           chmod 600 ~/.ssh/oracle.key
-          ssh-keyscan -H 34.61.133.138 >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ vars.GCP_IP }} >> ~/.ssh/known_hosts
 
       - name: Pull logs and params from Oracle
         run: |
           # Pull last 7 days of log files from confirmed path: /home/admin/Crypto-Survival-System/logs/
-          ssh -i ~/.ssh/oracle.key -o StrictHostKeyChecking=no admin@34.61.133.138 \
+          ssh -i ~/.ssh/oracle.key -o StrictHostKeyChecking=no admin@${{ vars.GCP_IP }} \
             "find /home/admin/Crypto-Survival-System/logs -name 'bot_*.log' -mtime -7 2>/dev/null | xargs cat 2>/dev/null || echo ''" > /tmp/tick_logs.txt
-          ssh -i ~/.ssh/oracle.key -o StrictHostKeyChecking=no admin@34.61.133.138 \
+          ssh -i ~/.ssh/oracle.key -o StrictHostKeyChecking=no admin@${{ vars.GCP_IP }} \
             "grep 'VOLUME_SPIKE_MIN\|RSI_RANGE_BUY_MAX\|RSI_TREND_BUY_MIN\|ADX_TREND_THRESHOLD' /home/admin/Crypto-Survival-System/.env" > /tmp/oracle_params.txt
           echo "Log lines pulled: $(wc -l < /tmp/tick_logs.txt)"
 
