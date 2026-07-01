@@ -95,6 +95,19 @@ class RiskEngine:
                 f"Drawdown {drawdown:.1%} exceeded {config.MAX_DRAWDOWN_KILL_SWITCH:.0%} threshold"
             )
 
+    def restore(self, state: dict) -> None:
+        """Restore state from persisted trade history after a restart."""
+        self.current_balance     = state["balance"]
+        self.peak_balance        = state["peak_balance"]
+        self.daily_start_balance = state["daily_start_balance"]
+        self.trades_today        = state["trades_today"]
+        self.consecutive_losses  = state["consecutive_losses"]
+        logger.info(
+            f"Risk state restored from {state['n_trades']} trades — "
+            f"balance=${self.current_balance:.2f} peak=${self.peak_balance:.2f} "
+            f"trades_today={self.trades_today} consec_losses={self.consecutive_losses}"
+        )
+
     def update_balance(self, new_balance: float):
         """Sync balance from exchange (live mode)."""
         self.current_balance = new_balance

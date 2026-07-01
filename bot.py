@@ -108,6 +108,55 @@ def init_db(db_path: str = config.DB_PATH):
     logger.info(f"Database ready: {db_path}")
 
 
+def load_persisted_state(db: sqlite3.Connection) -> dict:
+    """Reconstruct RiskEngine state from closed trade history on restart."""
+    try:
+        rows = db.execute(
+            "SELECT pnl_usdt, timestamp FROM trades ORDER BY timestamp ASC"
+        ).fetchall()
+        if not rows:
+            return {"restored": False}
+
+        balance = config.STARTING_CAPITAL
+        peak    = config.STARTING_CAPITAL
+        for pnl, _ in rows:
+            if pnl is not None:
+                balance += pnl
+                peak     = max(peak, balance)
+
+        daily_start = db.execute(
+            "SELECT COALESCE(SUM(pnl_usdt), 0) FROM trades WHERE date(timestamp) < date('now')"
+        ).fetchone()[0]
+        daily_start_balance = config.STARTING_CAPITAL + daily_start
+
+        trades_today = db.execute(
+            "SELECT COUNT(*) FROM trades WHERE date(timestamp) = date('now')"
+        ).fetchone()[0]
+
+        recent = db.execute(
+            "SELECT pnl_usdt FROM trades ORDER BY timestamp DESC LIMIT 10"
+        ).fetchall()
+        consecutive_losses = 0
+        for (pnl,) in recent:
+            if pnl is not None and pnl < 0:
+                consecutive_losses += 1
+            else:
+                break
+
+        return {
+            "restored":           True,
+            "n_trades":           len(rows),
+            "balance":            balance,
+            "peak_balance":       peak,
+            "daily_start_balance": daily_start_balance,
+            "trades_today":       trades_today,
+            "consecutive_losses": consecutive_losses,
+        }
+    except Exception as e:
+        logger.warning(f"Could not load persisted state: {e} — starting fresh")
+        return {"restored": False}
+
+
 def log_decision(conn, signal, confidence, regime_info, agent_signals, action):
     """Persist a consensus decision (including all agent details) to the decisions table."""
     agent_json = json.dumps([
@@ -517,16 +566,23 @@ class TradingBot:
         init_db()
         self.db = sqlite3.connect(config.DB_PATH, check_same_thread=False)
 
+        state = load_persisted_state(self.db)
+        if state.get("restored"):
+            self.risk.restore(state)
+
         if not self.live:
-            self.paper_eng = PaperTradingEngine(config.STARTING_CAPITAL)
+            restored_bal = state.get("balance", config.STARTING_CAPITAL)
+            self.paper_eng = PaperTradingEngine(restored_bal)
 
         mode_str = "LIVE" if self.live else "PAPER"
-        logger.info(f"Bot initialised — mode={mode_str} pair={config.TRADING_PAIR}")
+        restore_note = f"\nRestored from {state['n_trades']} trades" if state.get("restored") else "\nFresh start"
+        logger.info(f"Bot initialised — mode={mode_str} pair={config.TRADING_PAIR}{restore_note}")
         send_telegram(
             f"Bot started [{mode_str}]\n"
             f"Pair: {config.TRADING_PAIR}\n"
             f"Capital: ${self.risk.current_balance:.2f}\n"
             f"Kill switch: {self.risk.kill_switch}"
+            + restore_note
         )
 
         # Graceful shutdown on SIGTERM (macOS lid-close / system events)
