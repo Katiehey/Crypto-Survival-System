@@ -1,0 +1,50 @@
+name: VM Watchdog
+
+on:
+  schedule:
+    - cron: "0 * * * *"  # every hour
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  check-and-heal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check if dashboard is reachable
+        id: check
+        run: |
+          if curl -sf --connect-timeout 10 "http://${{ vars.GCP_IP }}:5000/" > /dev/null 2>&1; then
+            echo "alive=true" >> $GITHUB_OUTPUT
+          else
+            echo "alive=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Authenticate to GCP
+        if: steps.check.outputs.alive == 'false'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: 'projects/178320805108/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          service_account: 'vm-watchdog@project-d2baf739-bc5c-40d6-bd8.iam.gserviceaccount.com'
+
+      - name: Set up gcloud
+        if: steps.check.outputs.alive == 'false'
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Reset the VM
+        if: steps.check.outputs.alive == 'false'
+        run: |
+          gcloud compute instances reset crypto-survival-system \
+            --zone=us-central1-b \
+            --project=project-d2baf739-bc5c-40d6-bd8
+
+      - name: Notify Telegram
+        if: steps.check.outputs.alive == 'false'
+        run: |
+          curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d "chat_id=${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d "text=Watchdog: dashboard was unreachable — VM has been automatically reset. It should be back within ~1-2 minutes."
