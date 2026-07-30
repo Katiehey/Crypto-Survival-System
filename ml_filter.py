@@ -127,8 +127,9 @@ class SignalFilter:
     """
 
     THRESHOLD = 0.45  # block only if model is actively confident it's a loss (<45% win prob)
-                      # at 62 training samples CV accuracy is ~45% — effectively disabled
-                      # until 200+ trades accumulate
+                      # Training needs MIN_TRADES_TO_TRAIN (20) samples from the
+                      # backtest — NOT 200 live trades. Judge a trained model by
+                      # whether CV accuracy beats the base rate, not by sample count.
 
     def __init__(self):
         self._model: dict | None = None
@@ -161,7 +162,11 @@ class SignalFilter:
         if not self.is_trained:
             return True, 0.5
         try:
-            x = features_to_array(features).reshape(1, -1)
+            # Keep x 1-D: weights are shape (9,), so np.dot gives a true scalar.
+            # A (1,9) x_norm yields a shape-(1,) array, and float() on a size-1
+            # non-0-d array was removed in NumPy 2.0 — that raised on every call
+            # and, because this method fails open, silently passed every signal.
+            x = np.ravel(features_to_array(features))
             x_norm = (x - self._model["mean"]) / (self._model["std"] + 1e-10)
             logit  = float(
                 np.dot(x_norm, self._model["weights"]) + self._model["bias"]
