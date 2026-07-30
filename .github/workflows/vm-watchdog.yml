@@ -18,11 +18,23 @@ jobs:
       - name: Check if dashboard is reachable
         id: check
         run: |
-          if curl -sf --connect-timeout 10 "http://${{ vars.GCP_IP }}:5000/" > /dev/null 2>&1; then
-            echo "alive=true" >> $GITHUB_OUTPUT
-          else
-            echo "alive=false" >> $GITHUB_OUTPUT
-          fi
+          # ANY HTTP response proves the server is alive. The dashboard is
+          # password-protected and answers 401, so `curl -f` (which fails on
+          # >=400) wrongly reported a healthy VM as dead and reset it hourly.
+          # Only a connection failure -> code 000 means genuinely unreachable.
+          # Retry to avoid resetting on a single transient network blip.
+          ALIVE=false
+          for i in 1 2 3; do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 10 \
+                     "http://${{ vars.GCP_IP }}:5000/" 2>/dev/null || echo "000")
+            echo "attempt $i -> HTTP $CODE"
+            if [ "$CODE" != "000" ]; then
+              ALIVE=true
+              break
+            fi
+            sleep 20
+          done
+          echo "alive=$ALIVE" >> $GITHUB_OUTPUT
 
       - name: Authenticate to GCP
         if: steps.check.outputs.alive == 'false'
