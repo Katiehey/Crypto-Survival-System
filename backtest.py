@@ -144,14 +144,19 @@ class WalkForwardBacktester:
                 )
                 logger.info(f"Fetching {days} days of {symbol} {timeframe} from {exchange_id}…")
                 all_ohlcv = []
-                while True:
+                now_ms = exchange.milliseconds()
+                # Page until we reach the present. Do NOT break on a short page —
+                # exchanges routinely return fewer than `limit` mid-stream, which
+                # silently truncated the range to a fraction of `days`.
+                while since < now_ms:
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe, since=since, limit=1000)
                     if not ohlcv:
                         break
                     all_ohlcv.extend(ohlcv)
-                    since = ohlcv[-1][0] + 1
-                    if len(ohlcv) < 1000:
+                    next_since = ohlcv[-1][0] + 1
+                    if next_since <= since:   # no forward progress — avoid infinite loop
                         break
+                    since = next_since
                 if not all_ohlcv:
                     raise ValueError("No candles returned")
                 df = pd.DataFrame(all_ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
