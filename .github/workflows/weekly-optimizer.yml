@@ -8,7 +8,10 @@ on:
 jobs:
   optimize:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Two walk-forward backtests. The OHLCV pagination fix took the dataset
+    # from ~1999 bars (4 folds) to ~14400 bars (67 folds), so each run is now
+    # ~9 min instead of ~30s. 30 min was too tight for both.
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
