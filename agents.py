@@ -302,16 +302,27 @@ class SentimentAgent:
         logger.debug(f"Sentiment: {len(headlines)} headlines, score={score:+.3f}")
         return score
 
+    # These feeds reject feedparser's default User-Agent and return an empty
+    # body — parse() then yields 0 entries with no error, so the agent silently
+    # scored every tick as neutral. Fetch with requests + a browser UA instead.
+    _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+
     def _fetch_headlines(self) -> list[str]:
         """Pull the latest entry titles from all configured RSS feeds."""
         headlines = []
         for feed_url in config.SENTIMENT_FEEDS:
             try:
-                feed = feedparser.parse(feed_url)
+                resp = requests.get(feed_url, timeout=15, headers={"User-Agent": self._UA})
+                resp.raise_for_status()
+                feed = feedparser.parse(resp.content)
+                if not feed.entries:
+                    logger.warning(f"Feed returned 0 entries: {feed_url}")
                 for entry in feed.entries[:10]:
                     headlines.append(entry.get("title", ""))
             except Exception as e:
                 logger.debug(f"Feed error {feed_url}: {e}")
+        if not headlines:
+            logger.warning("SentimentAgent: no headlines from any feed — scoring neutral")
         return [h for h in headlines if h]
 
 
