@@ -23,12 +23,17 @@ jobs:
           # >=400) wrongly reported a healthy VM as dead and reset it hourly.
           # Only a connection failure -> code 000 means genuinely unreachable.
           # Retry to avoid resetting on a single transient network blip.
+          # NOTE: `curl -w "%{http_code}"` prints 000 on connection failure AND
+          # exits non-zero. A `|| echo 000` fallback therefore appends a SECOND
+          # 000, giving "000000" which never equals "000" -- that made every dead
+          # VM look healthy. Use `|| true` (no stdout) and validate numerically.
           ALIVE=false
           for i in 1 2 3; do
             CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 10 \
-                     "http://${{ vars.GCP_IP }}:5000/" 2>/dev/null || echo "000")
-            echo "attempt $i -> HTTP $CODE"
-            if [ "$CODE" != "000" ]; then
+                     "http://${{ vars.GCP_IP }}:5000/" 2>/dev/null) || true
+            echo "attempt $i -> HTTP '${CODE}'"
+            # any real HTTP response (incl. 401 from the password prompt) = alive
+            if [ -n "$CODE" ] && [ "$CODE" -eq "$CODE" ] 2>/dev/null && [ "$CODE" -ge 100 ]; then
               ALIVE=true
               break
             fi
