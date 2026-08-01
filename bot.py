@@ -648,14 +648,16 @@ class TradingBot:
         symbol    = config.TRADING_PAIR
         timeframe = config.TIMEFRAME
 
-        # 1. Fetch market data (1h primary + 4h for multi-timeframe confirmation)
+        # 1. Fetch market data (primary + higher timeframe for MTF confirmation)
         df = fetch_ohlcv_with_retry(self.exchange, symbol, timeframe, limit=300)
         if df is None or len(df) < config.MIN_CANDLES_REQUIRED:
             logger.warning(f"Insufficient data ({len(df) if df is not None else 0} bars)")
             return
 
-        # 4h data is optional — if fetch fails we continue without MTF filter
-        df_4h = fetch_ohlcv_with_retry(self.exchange, symbol, "4h", limit=100)
+        # HTF data is optional — if fetch fails we continue without the MTF filter.
+        # Derived from TIMEFRAME (see config.HTF_TIMEFRAME): hardcoding "4h" here
+        # made the filter compare 4h to itself once TIMEFRAME was switched to 4h.
+        df_4h = fetch_ohlcv_with_retry(self.exchange, symbol, config.HTF_TIMEFRAME, limit=100)
 
         close = df["close"].iloc[-1]
         high  = df["high"].iloc[-1]
@@ -829,14 +831,19 @@ def main():
     if args.train_hmm:
         from backtest import WalkForwardBacktester
         from hmm_engine import HMMRegimeDetector
-        print(f"Training HMM on {args.train_hmm_days} days of BTC/USDT 1h data …")
+        # Train on the SAME timeframe the bot trades — an HMM fitted on 1h bars
+        # produces meaningless regimes when fed 4h data (different feature scales).
+        print(f"Training HMM on {args.train_hmm_days} days of BTC/USDT {config.TIMEFRAME} data …")
         bt  = WalkForwardBacktester()
-        df  = bt.fetch_historical(days=args.train_hmm_days, timeframe="1h")
-        hmm = HMMRegimeDetector()
+        df  = bt.fetch_historical(days=args.train_hmm_days, timeframe=config.TIMEFRAME)
+        # Respect config.HMM_MODEL_PATH — HMMRegimeDetector() defaults to
+        # ops/hmm_model.pkl, which would silently overwrite a model for a
+        # different timeframe.
+        hmm = HMMRegimeDetector(config.HMM_MODEL_PATH)
         ok  = hmm.fit(df)
         if ok:
-            hmm.save_model()
-            print("HMM trained → ops/hmm_model.pkl")
+            hmm.save_model(config.HMM_MODEL_PATH)
+            print(f"HMM trained → {config.HMM_MODEL_PATH}")
             print("Generating regime chart …")
             hmm.plot_regimes(df, save_path="ops/hmm_regimes.png")
             print("Chart saved → ops/hmm_regimes.png")

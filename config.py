@@ -56,6 +56,11 @@ RSI_TREND_SELL_MAX    = float(os.getenv("RSI_TREND_SELL_MAX", "45"))
 RSI_RANGE_BUY_MAX     = float(os.getenv("RSI_RANGE_BUY_MAX",  "30"))   # genuine oversold
 RSI_RANGE_SELL_MIN    = float(os.getenv("RSI_RANGE_SELL_MIN", "70"))   # genuine overbought
 TIMEFRAME             = os.getenv("TIMEFRAME", "1h")
+# Higher timeframe for the ExecutionAgent's multi-timeframe confirmation. Must be
+# STRICTLY higher than TIMEFRAME — if they match, the filter compares a series to
+# itself, always agrees, and silently disables one of the four consensus agents.
+_HTF_DEFAULTS         = {"15m": "1h", "1h": "4h", "4h": "1d", "1d": "1w"}
+HTF_TIMEFRAME         = os.getenv("HTF_TIMEFRAME", _HTF_DEFAULTS.get(TIMEFRAME, "4h"))
 
 # ─── HMM Regime Detection ─────────────────────────────────────────────────────
 HMM_ENABLED        = os.getenv("HMM_ENABLED",        "true").lower() == "true"
