@@ -91,6 +91,7 @@ def fetch_data() -> dict[str, Any]:
         "bb_lower": 0, "bb_upper": 0, "vol_ratio": 0,
         "plus_di": 0, "minus_di": 0,
         "ema20_4h": 0, "ema50_4h": 0,
+        "timeframe": config.TIMEFRAME, "htf": config.HTF_TIMEFRAME,
         "rsi_threshold": config.RSI_TREND_BUY_MIN,
         "adx_threshold": config.ADX_TREND_THRESHOLD,
         "vol_threshold": config.VOLUME_SPIKE_MIN,
@@ -114,8 +115,11 @@ def fetch_data() -> dict[str, Any]:
         exchange = _build_exchange()
         symbol   = config.TRADING_PAIR
 
-        # ── 1h OHLCV ──────────────────────────────────────────────────────────
-        ohlcv = exchange.fetch_ohlcv(symbol, "1h", limit=300)
+        # ── primary OHLCV ─────────────────────────────────────────────────────
+        # Must match config.TIMEFRAME. Hardcoding "1h" here made the dashboard
+        # compute RSI/EMA/MACD/ADX on a different timeframe than the bot trades,
+        # so the Signal Heat panel showed conditions the bot was not acting on.
+        ohlcv = exchange.fetch_ohlcv(symbol, config.TIMEFRAME, limit=300)
         df    = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","volume"])
         close = df["close"]
 
@@ -157,8 +161,9 @@ def fetch_data() -> dict[str, Any]:
             else config.RSI_TREND_BUY_MIN
         )
 
-        # ── 4h OHLCV ──────────────────────────────────────────────────────────
-        ohlcv_4h = exchange.fetch_ohlcv(symbol, "4h", limit=100)
+        # ── higher-timeframe OHLCV (MTF confirmation) ─────────────────────────
+        # Mirrors the bot's ExecutionAgent, which uses config.HTF_TIMEFRAME.
+        ohlcv_4h = exchange.fetch_ohlcv(symbol, config.HTF_TIMEFRAME, limit=100)
         df4      = pd.DataFrame(ohlcv_4h, columns=["ts","open","high","low","close","volume"])
         c4       = df4["close"]
         d["ema20_4h"] = float(c4.ewm(span=20, adjust=False).mean().iloc[-1])
@@ -371,7 +376,7 @@ HTML = """<!DOCTYPE html>
 <div class="row g-3 mt-0">
   <div class="col-md-8">
     <div class="card">
-      <div class="card-header fw-bold">BTC/USDT — 48H PRICE</div>
+      <div class="card-header fw-bold">BTC/USDT — PRICE (<span id="tf-label">1h</span>)</div>
       <div class="card-body" style="height:190px;padding:.75rem">
         <canvas id="priceChart"></canvas>
       </div>
@@ -555,7 +560,7 @@ function render(d) {
   heat += heatRow('Volume spike >' + d.vol_threshold + 'x', volPct, d.vol_ratio.toFixed(2) + 'x');
   const adxPct = Math.min(110, d.adx / d.adx_threshold * 100);
   heat += heatRow('ADX → ' + d.adx_threshold, adxPct, d.adx.toFixed(1));
-  heat += checkRow('4h Trend (EMA20>50)', d.ema20_4h > d.ema50_4h,
+  heat += checkRow((d.htf||'4h') + ' Trend (EMA20>50)', d.ema20_4h > d.ema50_4h,
     d.ema20_4h > d.ema50_4h ? 'Bullish ✔' : 'Bearish ✘');
   $('heat-body').innerHTML = heat;
 
@@ -572,7 +577,7 @@ function render(d) {
   $('agents-body').innerHTML =
     agentCard(techOk, 'Technical',  isRanging ? 'RSI+BB+EMA200' : 'RSI+EMA+MACD') +
     agentCard(volOk,  'Volume',     d.vol_ratio.toFixed(2) + 'x (need ' + d.vol_threshold + 'x)') +
-    agentCard(mtfOk,  '4h MTF',    mtfOk ? 'Bullish aligned' : 'Bearish — blocked') +
+    agentCard(mtfOk,  (d.htf||'4h') + ' MTF',    mtfOk ? 'Bullish aligned' : 'Bearish — blocked') +
     agentCard(riskOk, 'Risk',       'DD=' + d.drawdown_pct.toFixed(1) + '%') +
     agentCard(false,  'ML Filter',  '⚪ bypass (<200 trades)') +
     hmmCard(d.hmm_regime, d.hmm_confidence, d.hmm_fallback);
@@ -603,6 +608,7 @@ function render(d) {
   $('drawdown').innerHTML      = `<span style="color:${d.drawdown_pct>10?'#f85149':'#3fb950'}">${d.drawdown_pct.toFixed(2)}%</span>`;
   $('daily-pnl').innerHTML     = `<span style="color:${d.daily_pnl>=0?'#3fb950':'#f85149'}">${d.daily_pnl>=0?'+':''}$${Math.abs(d.daily_pnl).toFixed(4)}</span>`;
   $('trades-today').textContent  = d.trades_today + ' / ' + d.max_trades_per_day;
+  { const tl = $('tf-label'); if (tl && d.timeframe) tl.textContent = d.timeframe; }
   $('total-trades').textContent  = d.total_trades;
   $('win-rate').textContent      = d.total_trades > 0 ? d.win_rate + '%' : '—';
   $('profit-factor').textContent = d.total_trades > 0 ? d.profit_factor : '—';
