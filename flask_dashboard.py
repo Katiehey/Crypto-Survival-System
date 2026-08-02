@@ -92,6 +92,7 @@ def fetch_data() -> dict[str, Any]:
         "plus_di": 0, "minus_di": 0,
         "ema20_4h": 0, "ema50_4h": 0,
         "timeframe": config.TIMEFRAME, "htf": config.HTF_TIMEFRAME,
+        "ml_filter_trained": False, "ml_filter_n": 0,
         "rsi_threshold": config.RSI_TREND_BUY_MIN,
         "adx_threshold": config.ADX_TREND_THRESHOLD,
         "vol_threshold": config.VOLUME_SPIKE_MIN,
@@ -155,6 +156,17 @@ def fetch_data() -> dict[str, Any]:
         d["hmm_regime"]     = ri.get("hmm_regime") or ""
         d["hmm_confidence"] = ri.get("hmm_confidence", 0.0)
         d["hmm_fallback"]   = ri.get("hmm_fallback", True)
+
+        # Report the ML filter's ACTUAL state. The old hardcoded label read
+        # "bypass (<200 trades)" -- the real minimum is MIN_TRADES_TO_TRAIN (20),
+        # and whether it is active depends on ops/signal_filter.pkl existing.
+        try:
+            from ml_filter import SignalFilter
+            _sf = SignalFilter()
+            d["ml_filter_trained"] = bool(_sf.is_trained)
+            d["ml_filter_n"] = int((_sf._model or {}).get("n_samples", 0)) if _sf.is_trained else 0
+        except Exception:
+            pass
 
         d["rsi_threshold"] = (
             config.RSI_RANGE_BUY_MAX if d["regime"] == "ranging"
@@ -579,7 +591,9 @@ function render(d) {
     agentCard(volOk,  'Volume',     d.vol_ratio.toFixed(2) + 'x (need ' + d.vol_threshold + 'x)') +
     agentCard(mtfOk,  (d.htf||'4h') + ' MTF',    mtfOk ? 'Bullish aligned' : 'Bearish — blocked') +
     agentCard(riskOk, 'Risk',       'DD=' + d.drawdown_pct.toFixed(1) + '%') +
-    agentCard(false,  'ML Filter',  '⚪ bypass (<200 trades)') +
+    agentCard(d.ml_filter_trained, 'ML Filter',
+      d.ml_filter_trained ? ('active — trained on ' + d.ml_filter_n + ' trades')
+                          : 'not trained — passthrough') +
     hmmCard(d.hmm_regime, d.hmm_confidence, d.hmm_fallback);
 
   // Signal orb
