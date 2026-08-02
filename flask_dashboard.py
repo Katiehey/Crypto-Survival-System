@@ -593,7 +593,7 @@ function render(d) {
     agentCard(riskOk, 'Risk',       'DD=' + d.drawdown_pct.toFixed(1) + '%') +
     agentCard(d.ml_filter_trained, 'ML Filter',
       d.ml_filter_trained ? ('active — trained on ' + d.ml_filter_n + ' trades')
-                          : 'not trained — passthrough') +
+                          : 'off by design — no model on host; 63.2% CV vs 63.0% base rate, no edge (docs/RESEARCH.md)') +
     hmmCard(d.hmm_regime, d.hmm_confidence, d.hmm_fallback);
 
   // Signal orb
