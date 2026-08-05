@@ -1,9 +1,9 @@
 # Strategy Research Log
 
-Ten hypotheses tested against real data with fee accounting, benchmarks, and
+Eleven hypotheses tested against real data with fee accounting, benchmarks, and
 fragility checks. Three real effects found; none profitable at small account size.
 
-The **methodology** section is the reusable part — those checks killed six results
+The **methodology** section is the reusable part — those checks killed seven results
 that looked strong at first pass.
 
 ---
@@ -125,6 +125,7 @@ Confirmed empirically: $30 → −99.2%; $100+ → consistently +60% win rate.
 | `ops/hmm_model.pkl` | 43 days stale | Classified a flat market as `bull` → demanded an EMA stack that couldn't form. `trend_up` was True **0 times in 1,312 ticks** |
 | `ml_filter.py` | `float()` on a size-1 array, removed in NumPy 2.0 | `predict()` raised on **every call**; fails open, so it silently passed 100% of signals while appearing installed |
 | `.github/workflows/vm-watchdog.yml` | `curl -sf` treats HTTP 401 as failure | Dashboard is password-protected → healthy VM read as dead → **25 hourly VM resets** |
+| scripts outside repo root | `load_dotenv()` resolves relative to the CALLING FILE | A scratchpad script got `KEY=None`, and Google reports that as "API key not valid". Pass an explicit path |
 | `config.py` | `load_dotenv(override=True)` | `.env` beats shell env vars, so `VAR=x python bot.py` silently does nothing **locally** (works in CI, where no `.env` exists) |
 
 ---
@@ -137,6 +138,8 @@ Confirmed empirically: $30 → −99.2%; $100+ → consistently +60% win rate.
 | Funding rates | `binanceusdm.fetch_funding_rate_history` | Honours `since`, back to 2021. KuCoin ignores `since` (~1 month only) |
 | Token unlocks | `defillama-datasets.llama.fi/emissions/<slug>` | **Free.** The documented `api.llama.fi/emissions` is paywalled (402); the datasets CDN is not |
 | Protocol list | `defillama-datasets.llama.fi/emissionsProtocolsList` | 359 protocols |
+| Historical headlines | GDELT `api.gdeltproject.org/api/v2/doc/doc` | Free, back to 2017. Filter `domain:` to match live feeds. Throttles hard — pace slowly, checkpoint every window |
+| LLM scoring | `gemini-3.1-flash-lite` via Generative Language API | Jan 2025 cutoff (verified: knows Dec 2024, not Mar 2025+). Grounding OFF or the window is contaminated |
 
 Unlock records live in `metadata.events` with `unlockType == "cliff"`. Compute size
 as `tokens / (circulating + tokens)` — dividing by a near-zero genesis supply
