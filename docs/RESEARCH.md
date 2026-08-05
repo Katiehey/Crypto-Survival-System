@@ -22,6 +22,7 @@ that looked strong at first pass.
 | 8 | New-listing drift | **Real** | −5.06% 7d excess vs BTC, t=−2.52, consistent 5 years — needs shorting |
 | 9 | Order flow / microstructure | Rejected | Fee arithmetic: needs 82.8% accuracy vs 52–55% state of the art |
 | 10 | Token unlock drift | **Real** | −2.99% 7d median excess, t=−4.31, 62% win — but only 2–5% CAGR when traded |
+| 11 | LLM vs keyword news sentiment | Rejected | r collapses 0.312 → 0.015 once look-ahead removed; news is priced |
 
 **Conclusion:** real inefficiencies exist and are findable. Capturing them requires
 shorting or capital. A $30 spot account has neither. The strongest effect (#10)
@@ -90,7 +91,22 @@ highs** — showed −99% at $30.
 Shorts die on wicks, not closes. Modelling liquidation on closing prices produces
 a much prettier, entirely false result.
 
-### 9. Minimum position size is a real constraint
+### 9. Event windows must start AFTER the information is known
+Sentiment scored per 3-day bucket, correlated against returns measured from the
+bucket's **start**, gave LLM r=+0.312 (t=3.86). Measured from the bucket's **end**
+— so every headline predates the return window — it gave **r=+0.015 (t=0.18)**.
+
+The entire signal was headlines from days 2-3 being correlated against a window
+containing days 2-3. Description masquerading as prediction.
+
+The tell was there beforehand: sentiment correlated with TRAILING returns at
+r=+0.427. A scorer that reads the recent past well will manufacture a spurious
+forward correlation if the windows overlap by even one day.
+
+> Ask of any event study: was every input observable before the measurement
+> window opened? Controlling for prior returns does NOT fix within-window leakage.
+
+### 10. Minimum position size is a real constraint
 ```
 Binance min notional      $5
 Equity                   $30    -> forced position = 16.7% of account
@@ -140,5 +156,5 @@ produces nonsense (observed: 288,000%).
 
 ---
 
-*Ten hypotheses. Three real effects. Zero convertible into money at $30.*
+*Eleven hypotheses. Three real effects. Zero convertible into money at $30.*
 *Total cost of finding out: $0.07 in paper trading losses.*
