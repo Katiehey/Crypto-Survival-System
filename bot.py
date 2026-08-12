@@ -157,6 +157,34 @@ def load_persisted_state(db: sqlite3.Connection) -> dict:
         return {"restored": False}
 
 
+def load_trend_state() -> dict:
+    """Load persisted long/flat state for the trend-filter strategy.
+
+    Returns {} if no state file yet. Fails loud (logs) on a corrupt file rather
+    than silently assuming 'flat' — assuming flat while actually holding would
+    make the bot re-buy and double up on the next restart.
+    """
+    path = config.TREND_STATE_FILE
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"Trend state file {path} is unreadable ({e}) — refusing to guess position")
+        raise
+
+
+def save_trend_state(state: dict):
+    """Atomically persist long/flat state so a restart mid-hold remembers we own BTC."""
+    path = config.TREND_STATE_FILE
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w") as f:
+        json.dump(state, f, indent=2)
+    os.replace(tmp, path)
+
+
 def log_decision(conn, signal, confidence, regime_info, agent_signals, action):
     """Persist a consensus decision (including all agent details) to the decisions table."""
     agent_json = json.dumps([
@@ -574,6 +602,24 @@ class TradingBot:
             restored_bal = state.get("balance", config.STARTING_CAPITAL)
             self.paper_eng = PaperTradingEngine(restored_bal)
 
+        # Trend-filter: reconstruct long/flat position across restarts. Positions
+        # here last months, so an in-memory-only PaperTradingEngine would "forget"
+        # it holds BTC after a cron restart and re-buy. Persisted state prevents that.
+        self._trend_last_ts: str | None = None
+        if config.STRATEGY == "trend_filter":
+            ts = load_trend_state()
+            self._trend_last_ts = ts.get("last_decision_ts")
+            if ts.get("position") == "long" and self.paper_eng:
+                self.paper_eng.in_trade = True
+                self.paper_eng.position = ts.get("position_detail", {})
+                logger.info(
+                    f"[TREND] Restored LONG position from state: "
+                    f"entry={self.paper_eng.position.get('entry_price')} "
+                    f"last_decision={self._trend_last_ts}"
+                )
+            else:
+                logger.info(f"[TREND] Restored FLAT (last_decision={self._trend_last_ts})")
+
         mode_str = "LIVE" if self.live else "PAPER"
         restore_note = f"\nRestored from {state['n_trades']} trades" if state.get("restored") else "\nFresh start"
         logger.info(f"Bot initialised — mode={mode_str} pair={config.TRADING_PAIR}{restore_note}")
@@ -644,6 +690,146 @@ class TradingBot:
         self.db.close()
 
     def _tick(self):
+        """Single iteration of the trading loop — dispatch to the configured strategy."""
+        if config.STRATEGY == "trend_filter":
+            return self._tick_trend_filter()
+        return self._tick_consensus()
+
+    def _tick_trend_filter(self):
+        """Long/flat daily SMA filter (hypothesis 12).
+
+        Once per CLOSED daily candle: if close > N-day SMA -> hold BTC (all-in),
+        else -> hold cash (all-out). No SL/TP, no consensus. Fails loud on empty
+        or stale data rather than trading on a frozen feed.
+        """
+        symbol = config.TRADING_PAIR
+        period = config.TREND_SMA_PERIOD
+
+        if self.risk.kill_switch:
+            logger.debug("[TREND] Kill switch engaged — no action")
+            return
+
+        # Need period closed candles + the current forming one + headroom.
+        df = fetch_ohlcv_with_retry(self.exchange, symbol, config.TREND_TIMEFRAME,
+                                    limit=period + 50)
+        if df is None or len(df) < period + 1:
+            logger.error(f"[TREND] Insufficient daily data "
+                         f"({0 if df is None else len(df)} bars, need {period + 1}) — skipping tick")
+            return
+
+        # Drop the still-forming candle; decisions use only CLOSED candles.
+        closed = df.iloc[:-1]
+        last_ts = closed.index[-1]
+
+        # Fail loud on a stale/frozen feed instead of trading on old prices.
+        age_h = (datetime.now(timezone.utc) - last_ts.to_pydatetime()).total_seconds() / 3600
+        if age_h > config.TREND_MAX_STALE_HOURS:
+            msg = (f"[TREND] Newest closed daily candle is {age_h:.0f}h old "
+                   f"(> {config.TREND_MAX_STALE_HOURS:.0f}h) — data feed may be frozen. No trade.")
+            logger.error(msg)
+            send_telegram("⚠️ " + msg)
+            return
+
+        # Act at most once per closed daily candle. Other ticks just idle.
+        last_ts_iso = last_ts.isoformat()
+        if last_ts_iso == self._trend_last_ts:
+            logger.debug(f"[TREND] Already decided for candle {last_ts_iso} — idle")
+            return
+
+        sma = closed["close"].rolling(period).mean().iloc[-1]
+        close = closed["close"].iloc[-1]
+        if pd.isna(sma):
+            logger.error(f"[TREND] SMA{period} is NaN with {len(closed)} closed candles — skipping")
+            return
+
+        want_long = close > sma
+        holding = bool(self.paper_eng and self.paper_eng.in_trade)
+        if self.paper_eng:
+            self.risk.update_balance(self.paper_eng.balance)
+
+        logger.info(
+            f"[TREND] candle={last_ts.date()} close={close:.2f} SMA{period}={sma:.2f} "
+            f"-> want={'LONG' if want_long else 'FLAT'} holding={holding} | {self.risk.summary()}"
+        )
+
+        action = "hold"
+        if want_long and not holding:
+            action = self._trend_enter(close, last_ts)
+        elif not want_long and holding:
+            action = self._trend_exit(close, last_ts)
+
+        # Record that this candle has been processed (persist even on 'hold' so we
+        # don't re-evaluate the same candle every 60s after a restart).
+        self._trend_last_ts = last_ts_iso
+        self._persist_trend_state(last_ts_iso)
+        self._log_trend_decision(close, sma, want_long, action)
+
+    def _trend_enter(self, price: float, candle_ts) -> str:
+        """Go all-in long. Reuses the paper engine's slippage+fee accounting."""
+        size = round(self.risk.current_balance * config.TREND_POSITION_PCT, 2)
+        # Levels are unused by this strategy (no SL/TP); pass placeholders far away
+        # so any stray check_exit call can never trigger.
+        levels = {"stop_loss": price * 0.01, "take_profit": price * 100}
+        self.paper_eng.enter("BUY", price, size, levels, regime="trend_up")
+        send_telegram(
+            f"🟢 TREND: entered LONG [PAPER]\n"
+            f"BTC @ {price:.2f} (close > SMA{config.TREND_SMA_PERIOD})\n"
+            f"Size=${size:.2f} | Balance=${self.risk.current_balance:.2f}"
+        )
+        return "enter_long"
+
+    def _trend_exit(self, price: float, candle_ts) -> str:
+        """Go all-out to cash on a trend flip. Books PnL to risk + trades table."""
+        result = self.paper_eng.force_exit(price, reason="TREND_FLIP")
+        if result:
+            result["regime"] = "trend_down"
+            self.risk.record_trade(result["pnl_usdt"])
+            log_trade(self.db, result)
+            send_telegram(
+                f"🔴 TREND: exited to CASH [PAPER]\n"
+                f"BTC @ {result['exit_price']:.2f} (close < SMA{config.TREND_SMA_PERIOD})\n"
+                f"PnL: ${result['pnl_usdt']:+.4f} ({result['pnl_pct']:+.2f}%)\n"
+                f"{self.risk.summary()}"
+            )
+        return "exit_flat"
+
+    def _persist_trend_state(self, last_ts_iso: str):
+        """Write long/flat state to disk so restarts don't forget an open position."""
+        holding = bool(self.paper_eng and self.paper_eng.in_trade)
+        detail = dict(self.paper_eng.position) if holding else {}
+        # datetime isn't JSON-serialisable — stringify entered_at if present.
+        if isinstance(detail.get("entered_at"), datetime):
+            detail["entered_at"] = detail["entered_at"].isoformat()
+        save_trend_state({
+            "position":        "long" if holding else "flat",
+            "position_detail": detail,
+            "last_decision_ts": last_ts_iso,
+            "balance":         round(self.risk.current_balance, 4),
+            "updated_at":      datetime.now(timezone.utc).isoformat(),
+        })
+
+    def _log_trend_decision(self, close, sma, want_long, action):
+        """Record the daily decision to the decisions table (dashboard visibility)."""
+        try:
+            self.db.execute(
+                "INSERT INTO decisions (timestamp, signal, confidence, regime, adx, agent_details, action_taken) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    datetime.now(timezone.utc).isoformat(),
+                    "LONG" if want_long else "FLAT",
+                    1.0,
+                    "trend_up" if want_long else "trend_down",
+                    0,
+                    json.dumps({"close": round(close, 2), "sma": round(float(sma), 2),
+                                "period": config.TREND_SMA_PERIOD}),
+                    action,
+                ),
+            )
+            self.db.commit()
+        except Exception as e:
+            logger.warning(f"[TREND] Could not log decision: {e}")
+
+    def _tick_consensus(self):
         """Single iteration of the trading loop."""
         symbol    = config.TRADING_PAIR
         timeframe = config.TIMEFRAME

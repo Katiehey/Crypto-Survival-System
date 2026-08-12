@@ -48,6 +48,28 @@ LONG_ONLY = os.getenv("LONG_ONLY", "true").lower() == "true"
 VOLUME_SPIKE_MIN = float(os.getenv("VOLUME_SPIKE_MIN", "1.2"))
 
 # ─── Strategy ────────────────────────────────────────────────────────────────
+# Which decision engine drives the bot:
+#   "trend_filter" — long/flat daily SMA filter (hypothesis 12; validated Aug 2026).
+#                    All-in/all-out on BTC vs its own N-day average. No SL/TP, no
+#                    consensus, no HMM. Decides once per closed daily candle.
+#   "consensus"    — legacy 4-agent + HMM + ATR SL/TP engine (no demonstrated edge).
+# Revert to the old system by setting STRATEGY=consensus in .env.
+STRATEGY              = os.getenv("STRATEGY", "trend_filter")
+# Trend-filter parameters. 150-day chosen empirically: best full-cycle drawdown
+# control (maxDD ~-46% vs B&H ~-80%) without becoming whipsaw-prone. Do NOT
+# auto-tune this — a faster lookback wins on return but reintroduces deep drawdowns.
+TREND_SMA_PERIOD      = int(os.getenv("TREND_SMA_PERIOD", "150"))
+TREND_TIMEFRAME       = os.getenv("TREND_TIMEFRAME", "1d")
+# Fraction of balance deployed when long. The backtest was 100% in/out; we hold
+# back a sliver so fees/slippage never overdraw the paper balance.
+TREND_POSITION_PCT    = float(os.getenv("TREND_POSITION_PCT", "0.98"))
+# Fail loud if the newest CLOSED daily candle is older than this. Catches a frozen
+# or lagging data feed instead of silently trading on stale prices.
+TREND_MAX_STALE_HOURS = float(os.getenv("TREND_MAX_STALE_HOURS", "48"))
+# Persists long/flat state across restarts so a cron-restart mid-hold doesn't
+# forget we own BTC (holds last months, not minutes — this matters here).
+TREND_STATE_FILE      = os.getenv("TREND_STATE_FILE", "ops/trend_state.json")
+
 DATA_UPDATE_INTERVAL  = int(os.getenv("DATA_UPDATE_INTERVAL", "60"))   # seconds
 MIN_CANDLES_REQUIRED  = int(os.getenv("MIN_CANDLES_REQUIRED", "100"))
 ADX_TREND_THRESHOLD   = float(os.getenv("ADX_TREND_THRESHOLD", "25"))  # ADX > 25 = trending
