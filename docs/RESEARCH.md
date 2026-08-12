@@ -1,7 +1,9 @@
 # Strategy Research Log
 
-Eleven hypotheses tested against real data with fee accounting, benchmarks, and
-fragility checks. Three real effects found; none profitable at small account size.
+Twelve hypotheses tested against real data with fee accounting, benchmarks, and
+fragility checks. Four real effects found; three need shorting or more capital, but
+the fourth — a long/flat 150-day BTC trend filter — is executable at $30 and is now
+**deployed live in paper mode** (hypothesis 12, Aug 2026).
 
 The **methodology** section is the reusable part — those checks killed seven results
 that looked strong at first pass.
@@ -23,10 +25,16 @@ that looked strong at first pass.
 | 9 | Order flow / microstructure | Rejected | Fee arithmetic: needs 82.8% accuracy vs 52–55% state of the art |
 | 10 | Token unlock drift | **Real** | −2.99% 7d median excess, t=−4.31, 62% win — but only 2–5% CAGR when traded |
 | 11 | LLM vs keyword news sentiment | Rejected | r collapses 0.312 → 0.015 once look-ahead removed; news is priced |
+| 12 | Long/flat 150d trend filter (BTC) | **Real & deployed** | CAGR ~35% ≈ B&H, maxDD ~−46% vs ~−80%; survives rolling walk-forward + whole-grid OOS. Insurance, not alpha |
 
-**Conclusion:** real inefficiencies exist and are findable. Capturing them requires
-shorting or capital. A $30 spot account has neither. The strongest effect (#10)
-isn't worth trading even at scale once liquidation risk is modelled.
+**Conclusion:** real inefficiencies exist and are findable. Effects #5/#8/#10 require
+shorting or capital a $30 spot account lacks. But #12 breaks the deadlock: judged on
+*drawdown* rather than Sharpe (the account's true mandate is capital preservation), a
+long/flat trend filter roughly halves buy-and-hold's max drawdown while matching its
+full-cycle return — and, being long/flat spot with all-in/all-out sizing, needs neither
+shorting nor a minimum-order workaround. It is the first effect converted into a live
+(paper) strategy. It is crash insurance, not bull-market alpha — expect it to lag a
+sustained rally. Details below.
 
 ---
 
@@ -147,6 +155,44 @@ produces nonsense (observed: 288,000%).
 
 ---
 
+## Hypothesis 12 — long/flat trend filter (the one that shipped)
+
+**Rule:** once per closed daily candle, hold BTC if close > 150-day SMA, else hold cash.
+Long/flat only, spot, all-in/all-out. Fee 0.10% per position change (~5–15 flips/yr).
+
+**Why it clears the walls the others hit:** no shorting (rule 7), no minimum-order sizing
+trap (rule 10 — you're 100% in or 100% out, never fractionally sized), no liquidation risk
+(rule 8 doesn't apply to unlevered spot — the drawdown numbers are real, not pre-liquidation
+illusions). Fees are trivial at daily cadence (rule 6).
+
+**Why it isn't a re-run of #3 (TSMOM, rejected):** #3 was judged on return and Sharpe and
+lost. #12 is judged on **max drawdown / Calmar** — the correct objective for an account whose
+mandate is capital preservation. Sharpe penalises upside vol equally; this account cares only
+about the left tail.
+
+**Evidence (Binance daily 2017–2026, fees on, no look-ahead — signal from close[t], applied
+to return t→t+1):**
+- Full sample, fixed L=150: CAGR 34.7%, Sharpe 0.88, **maxDD −46.2%**, Calmar 0.75
+  vs B&H CAGR ~35%, Sharpe 0.64, **maxDD −77 to −83%**, Calmar 0.29.
+- Rolling walk-forward 2019–2026 (lookback re-picked every 6mo on past data only): beats B&H
+  on every metric.
+- Whole-grid OOS 2022–2026: **6 of 7 lookbacks** beat B&H Calmar → parameter-robust, not luck.
+- Year-by-year: edge recurs in 2018, 2022 *and* 2026 (multiple crashes) — not one event.
+
+**Honest caveats:** it is insurance, not alpha — it trades away bull-market upside (lost to
+B&H in 2020/2023/2024) for bear protection. Live drawdown expectation is **−45% to −60%**,
+not the −31% seen in the 2022–2026 sub-window (don't cherry-pick). If BTC matures into a
+low-vol grind, whipsaw cost stays while the crashes it feeds on shrink — forward testing,
+not more backtesting, is what will reveal that.
+
+**Deployment:** `STRATEGY=trend_filter` in `bot.py` (`_tick_trend_filter`). `EXCHANGE=kucoin`
+on the VM (KuCoin serves ≥151 daily candles; agrees with Binance to the penny). Kill switch
+raised 0.25→0.55 so a normal drawdown doesn't halt it. Fails loud on empty/stale(>48h)/NaN
+data; long/flat state persists across restarts in `ops/trend_state.json`. Backtests in
+`research/trend_filter*.py`. Live in paper since Aug 2026.
+
+---
+
 ## What would change these conclusions
 
 - **Capital ≥ $250–500** — makes #10 survivable, though still only 2–5% CAGR
@@ -159,5 +205,5 @@ produces nonsense (observed: 288,000%).
 
 ---
 
-*Eleven hypotheses. Three real effects. Zero convertible into money at $30.*
+*Twelve hypotheses. Four real effects. One convertible into money at $30 — now live.*
 *Total cost of finding out: $0.07 in paper trading losses.*

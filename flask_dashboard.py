@@ -9,6 +9,7 @@ Then open in your browser: http://<oracle-ip>:5000
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -110,6 +111,11 @@ def fetch_data() -> dict[str, Any]:
         "cpu_pct": 0, "ram_used_mb": 0, "ram_total_mb": 0,
         "last_updated": "—", "uptime": "00:00:00", "error": "",
         "hmm_regime": "", "hmm_confidence": 0.0, "hmm_fallback": True,
+        # Active strategy + trend-filter state (what the bot ACTUALLY trades on).
+        "strategy": getattr(config, "STRATEGY", "consensus"),
+        "trend_sma_period": getattr(config, "TREND_SMA_PERIOD", 150),
+        "trend_sma": 0, "trend_close": 0, "trend_gap_pct": 0,
+        "trend_want_long": False, "trend_position": "unknown",
     }
 
     try:
@@ -180,6 +186,27 @@ def fetch_data() -> dict[str, Any]:
         c4       = df4["close"]
         d["ema20_4h"] = float(c4.ewm(span=20, adjust=False).mean().iloc[-1])
         d["ema50_4h"] = float(c4.ewm(span=50, adjust=False).mean().iloc[-1])
+
+        # ── Trend-filter state (the live strategy) ────────────────────────────
+        # Compute the same long/flat signal the bot uses, and read the position it
+        # persisted. Wrapped so a data hiccup never takes down the dashboard.
+        if getattr(config, "STRATEGY", "") == "trend_filter":
+            try:
+                period = config.TREND_SMA_PERIOD
+                d_ohlcv = exchange.fetch_ohlcv(symbol, config.TREND_TIMEFRAME, limit=period + 50)
+                dclose = pd.DataFrame(d_ohlcv, columns=["ts","open","high","low","close","volume"])["close"]
+                dclose = dclose.iloc[:-1]  # drop forming candle, mirror the bot
+                sma = float(dclose.rolling(period).mean().iloc[-1])
+                last = float(dclose.iloc[-1])
+                d["trend_sma"] = sma
+                d["trend_close"] = last
+                d["trend_gap_pct"] = (last - sma) / sma * 100 if sma else 0
+                d["trend_want_long"] = last > sma
+                st = json.loads(Path(config.TREND_STATE_FILE).read_text()) \
+                    if Path(config.TREND_STATE_FILE).exists() else {}
+                d["trend_position"] = st.get("position", "unknown")
+            except Exception as e:
+                d["error"] = f"trend state: {e}"
 
         # ── Order book depth (KuCoin CEX, not KCC chain) ──────────────────────
         try:
@@ -302,6 +329,17 @@ HTML = """<!DOCTYPE html>
 </div>
 
 <div class="container-fluid p-3">
+
+<!-- STRATEGY BANNER: what the bot is ACTUALLY trading on -->
+<div class="card mb-3" id="strategy-banner">
+  <div class="card-body py-2 d-flex flex-wrap align-items-center gap-3">
+    <span class="fw-bold">ACTIVE STRATEGY</span>
+    <span class="badge bg-secondary" id="strategy-name" style="font-size:.8rem">—</span>
+    <span id="trend-state" style="font-size:.85rem"></span>
+    <span class="g-dim ms-auto" id="trend-note" style="font-size:.72rem"></span>
+  </div>
+</div>
+
 <div class="row g-3">
 
   <!-- COL A: Signal Orb + Account -->
@@ -524,6 +562,27 @@ function render(d) {
     : '';
   $('last-updated').textContent = 'Updated ' + d.last_updated;
   $('error-msg').textContent = d.error || '';
+
+  // Strategy banner — reflect what the bot ACTUALLY trades on
+  const isTrend = d.strategy === 'trend_filter';
+  $('strategy-name').textContent = isTrend
+    ? ('TREND FILTER · ' + d.trend_sma_period + 'd SMA') : (d.strategy || 'consensus').toUpperCase();
+  $('strategy-name').className = 'badge ' + (isTrend ? 'bg-success' : 'bg-secondary');
+  if (isTrend) {
+    const long = d.trend_position === 'long';
+    const wantLong = d.trend_want_long;
+    const col = long ? '#3fb950' : '#8b949e';
+    const gap = (d.trend_gap_pct >= 0 ? '+' : '') + d.trend_gap_pct.toFixed(1) + '%';
+    $('trend-state').innerHTML =
+      `<span style="color:${col};font-weight:700">${long ? '● HOLDING BTC' : '○ IN CASH'}</span>` +
+      ` &nbsp; close $${Math.round(d.trend_close)} vs SMA${d.trend_sma_period} $${Math.round(d.trend_sma)} (${gap})` +
+      ` &nbsp; signal: <b>${wantLong ? 'LONG' : 'FLAT'}</b>` +
+      (long !== wantLong ? ' <span style="color:#e3b341">(flips next daily close)</span>' : '');
+    $('trend-note').textContent = 'Panels below (Signal Heat / agents) are the LEGACY consensus engine — not driving trades.';
+  } else {
+    $('trend-state').textContent = '';
+    $('trend-note').textContent = '';
+  }
 
   // Heat
   const isRanging = d.regime === 'ranging';
