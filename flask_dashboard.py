@@ -113,6 +113,7 @@ def fetch_data() -> dict[str, Any]:
         "hmm_regime": "", "hmm_confidence": 0.0, "hmm_fallback": True,
         # Active strategy + trend-filter state (what the bot ACTUALLY trades on).
         "strategy": getattr(config, "STRATEGY", "consensus"),
+        "chart_timeframe": config.TIMEFRAME,
         "trend_sma_period": getattr(config, "TREND_SMA_PERIOD", 150),
         "trend_sma": 0, "trend_close": 0, "trend_gap_pct": 0,
         "trend_want_long": False, "trend_position": "unknown",
@@ -205,6 +206,12 @@ def fetch_data() -> dict[str, Any]:
                 st = json.loads(Path(config.TREND_STATE_FILE).read_text()) \
                     if Path(config.TREND_STATE_FILE).exists() else {}
                 d["trend_position"] = st.get("position", "unknown")
+                # The price chart defaults to config.TIMEFRAME (4h), but this
+                # strategy decides on daily candles — showing 4h means watching a
+                # different series than the one making decisions. Reuse the daily
+                # closes already fetched above.
+                d["price_history"] = [round(float(x), 2) for x in dclose.tail(60).tolist()]
+                d["chart_timeframe"] = config.TREND_TIMEFRAME
             except Exception as e:
                 d["error"] = f"trend state: {e}"
 
@@ -233,9 +240,14 @@ def fetch_data() -> dict[str, Any]:
             conn.close()
 
             if not all_pnl.empty:
-                equity             = config.STARTING_CAPITAL + all_pnl["pnl_usdt"].cumsum()
+                # Seed the series with STARTING_CAPITAL: without it the equity curve
+                # begins AFTER the first trade, so a first losing trade sets the peak
+                # to the already-reduced balance and drawdown reads 0.00% forever.
+                curve              = config.STARTING_CAPITAL + all_pnl["pnl_usdt"].cumsum()
+                equity             = pd.concat([pd.Series([float(config.STARTING_CAPITAL)]), curve],
+                                               ignore_index=True)
                 d["balance"]       = float(equity.iloc[-1])
-                d["peak"]          = float(equity.expanding().max().iloc[-1])
+                d["peak"]          = float(equity.max())
                 d["drawdown_pct"]  = max(0.0, (d["peak"] - d["balance"]) / d["peak"] * 100)
                 d["total_trades"]  = int(total_count["cnt"].iloc[0])
 
@@ -680,8 +692,12 @@ function render(d) {
   $('peak').textContent        = '$' + d.peak.toFixed(2);
   $('drawdown').innerHTML      = `<span style="color:${d.drawdown_pct>10?'#f85149':'#3fb950'}">${d.drawdown_pct.toFixed(2)}%</span>`;
   $('daily-pnl').innerHTML     = `<span style="color:${d.daily_pnl>=0?'#3fb950':'#f85149'}">${d.daily_pnl>=0?'+':''}$${Math.abs(d.daily_pnl).toFixed(4)}</span>`;
-  $('trades-today').textContent  = d.trades_today + ' / ' + d.max_trades_per_day;
-  { const tl = $('tf-label'); if (tl && d.timeframe) tl.textContent = d.timeframe; }
+  // MAX_TRADES_PER_DAY only gates the consensus engine. trend_filter trades ~2x
+  // a year, so showing "0 / 5" implies a limit that does not apply to it.
+  $('trades-today').textContent  = (d.strategy === 'trend_filter')
+    ? d.trades_today + '  (no daily cap)'
+    : d.trades_today + ' / ' + d.max_trades_per_day;
+  { const tl = $('tf-label'); if (tl) tl.textContent = d.chart_timeframe || d.timeframe; }
   $('total-trades').textContent  = d.total_trades;
   $('win-rate').textContent      = d.total_trades > 0 ? d.win_rate + '%' : '—';
   $('profit-factor').textContent = d.total_trades > 0 ? d.profit_factor : '—';
