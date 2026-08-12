@@ -16,6 +16,27 @@ with open("/tmp/tick_logs.txt") as f:
 with open("/tmp/oracle_params.txt") as f:
     params = f.read()
 
+# The optimizer tunes VOLUME_SPIKE_MIN / RSI thresholds, which belong to the
+# CONSENSUS engine. Under STRATEGY=trend_filter none of those parameters are
+# read, so any proposal it produced would be meaningless. Detect and skip
+# loudly rather than emit a confident recommendation about dead settings.
+# Logs are concatenated in time order, so whichever marker appears LAST is the
+# strategy currently running. Presence-checking is not enough: a window spanning
+# the switchover contains both, and the optimizer would then analyse thousands of
+# stale consensus ticks and report confidently on a strategy that no longer runs.
+if logs.rfind("[TREND]") > logs.rfind("[TICK]"):
+    n = len(re.findall(r'\[TREND\]', logs))
+    print("TICKS=0")
+    print("VOL_BLOCKS=0"); print("RSI_BLOCKS=0")
+    print("MTF_BLOCKS=0"); print("RISK_BLOCKS=0")
+    print("TOTAL_HOLDS=0"); print("CURRENT_VOL=0")
+    print("DECISION=none")
+    print(f"REASON=STRATEGY=trend_filter is live ({n} daily decisions in window). "
+          "This optimizer only tunes consensus-engine parameters "
+          "(VOLUME_SPIKE_MIN, RSI thresholds), which trend_filter does not use. "
+          "Nothing to optimise — skipping rather than proposing changes to dead settings.")
+    raise SystemExit(0)
+
 ticks     = len(re.findall(r'\[TICK\]', logs))
 vol_blocks = len(re.findall(r'Low volume.*skipping', logs))
 rsi_blocks = len(re.findall(r'conditions not met.*RSI|No mean-reversion trigger', logs))
