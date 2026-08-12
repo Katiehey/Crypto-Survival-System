@@ -332,6 +332,8 @@ HTML = """<!DOCTYPE html>
   <span id="regime-badge">—</span>
   <span class="g-dim" id="adx-val" style="font-size:.8rem">ADX —</span>
   <span id="hmm-header-badge" style="font-size:.78rem"></span>
+  <span id="legacy-tag" class="g-dim"
+        style="font-size:.68rem;border:1px solid #30363d;border-radius:3px;padding:0 4px"></span>
   <span class="ms-auto d-flex align-items-center gap-2">
     <span class="pulse-dot" id="pulse-dot"></span>
     <span class="g-dim" id="last-updated" style="font-size:.78rem">—</span>
@@ -563,6 +565,13 @@ function render(d) {
   $('price-change').innerHTML =
     `<span class="${up?'g-pos':'g-neg'}">${up?'▲':'▼'} ${Math.abs(d.price_change).toFixed(2)}%</span>`;
   const rc = d.regime === 'trending' ? '#e3b341' : '#58a6ff';
+  // Under trend_filter the regime/ADX/HMM badges describe the LEGACY engine —
+  // the live strategy has no regime, ADX or HMM. Label them so the most prominent
+  // items on the page can't be mistaken for what is actually driving trades.
+  if (d.strategy === 'trend_filter') {
+    const lg = $('legacy-tag');
+    if (lg) lg.textContent = 'legacy';
+  }
   $('regime-badge').innerHTML =
     `<span class="badge" style="background:${rc}22;color:${rc};border:1px solid ${rc}">${d.regime.toUpperCase()}</span>`;
   $('adx-val').textContent = 'ADX ' + d.adx.toFixed(1);
@@ -590,7 +599,7 @@ function render(d) {
       ` &nbsp; close $${Math.round(d.trend_close)} vs SMA${d.trend_sma_period} $${Math.round(d.trend_sma)} (${gap})` +
       ` &nbsp; signal: <b>${wantLong ? 'LONG' : 'FLAT'}</b>` +
       (long !== wantLong ? ' <span style="color:#e3b341">(flips next daily close)</span>' : '');
-    $('trend-note').textContent = 'Panels below (Signal Heat / agents) are the LEGACY consensus engine — not driving trades.';
+    $('trend-note').textContent = 'Header regime/ADX/HMM and the Signal Heat / agent panels are LEGACY consensus telemetry — not driving trades.';
   } else {
     $('trend-state').textContent = '';
     $('trend-note').textContent = '';
@@ -669,7 +678,19 @@ function render(d) {
 
   // Signal orb
   const met = [techOk, volOk, mtfOk, riskOk].filter(Boolean).length;
-  $('conds-met').textContent = met + ' / 4 conditions met';
+  if (d.strategy === 'trend_filter') {
+    // Show the live strategy's actual state. "1 / 4 conditions met" is a consensus
+    // count and reads as though it gates the trade — it does not.
+    const holding = d.trend_position === 'long';
+    $('signal-orb').textContent = holding ? '🟢' : '○';
+    $('signal-text').textContent = holding ? 'HOLDING BTC' : 'IN CASH';
+    const gap = (d.trend_gap_pct === undefined) ? null : d.trend_gap_pct;
+    $('conds-met').textContent = (gap === null)
+      ? 'trend filter'
+      : (gap >= 0 ? 'above 150d SMA (+' : 'below 150d SMA (') + gap.toFixed(1) + '%)';
+  } else {
+    $('conds-met').textContent = met + ' / 4 conditions met';
+  }
   if (met === 4) {
     $('signal-orb').className  = 'orb orb-go mb-2';
     $('signal-orb').textContent = '🔥';
