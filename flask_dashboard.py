@@ -740,7 +740,14 @@ function render(d) {
   } else {
     $('conds-met').textContent = met + ' / 4 conditions met';
   }
-  if (met === 4) {
+  // Under trend_filter the orb was already set above to HOLDING/CASH. This
+  // consensus block ran unconditionally afterwards and overwrote it with
+  // "2/4 WARMING UP" — a count of conditions that gate nothing.
+  if (d.strategy === 'trend_filter') {
+    const holdingNow = d.trend_position === 'long';
+    $('signal-orb').className   = 'orb ' + (holdingNow ? 'orb-go' : 'orb-wait') + ' mb-2';
+    $('signal-text').style.color = holdingNow ? '#3fb950' : '#8b949e';
+  } else if (met === 4) {
     $('signal-orb').className  = 'orb orb-go mb-2';
     $('signal-orb').textContent = '🔥';
     $('signal-text').textContent = 'SIGNAL POSSIBLE';
