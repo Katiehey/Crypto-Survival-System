@@ -625,18 +625,30 @@ function render(d) {
     const long = d.trend_position === 'long';
     const wantLong = d.trend_want_long;
     const col = long ? '#3fb950' : '#8b949e';
-    const gap = (d.trend_gap_pct >= 0 ? '+' : '') + d.trend_gap_pct.toFixed(1) + '%';
-    $('trend-state').innerHTML =
+    const GRN = '#3fb950', RED = '#f85149';
+    const pct = (v) => (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+    const tint = (v, txt) => `<span style="color:${v >= 0 ? GRN : RED};font-weight:600">${txt}</span>`;
+
+    // Above the 150d line is the bullish side of this strategy, below is bearish —
+    // colour it so direction reads at a glance.
+    const gapHtml = tint(d.trend_gap_pct, '(' + pct(d.trend_gap_pct) + ')');
+
+    // Build the whole banner as ONE innerHTML assignment. Appending with
+    // `textContent +=` afterwards strips every tag already set, which silently
+    // flattened the colours and the bold signal.
+    let html =
       `<span style="color:${col};font-weight:700">${long ? '● HOLDING BTC' : '○ IN CASH'}</span>` +
-      ` &nbsp; close $${Math.round(d.trend_close)} vs SMA${d.trend_sma_period} $${Math.round(d.trend_sma)} (${gap})` +
+      ` &nbsp; close $${Math.round(d.trend_close).toLocaleString()}` +
+      ` vs SMA${d.trend_sma_period} $${Math.round(d.trend_sma).toLocaleString()} ${gapHtml}` +
       ` &nbsp; signal: <b>${wantLong ? 'LONG' : 'FLAT'}</b>` +
       (long !== wantLong ? ' <span style="color:#e3b341">(flips next daily close)</span>' : '');
-    $('trend-note').textContent = 'Header regime/ADX/HMM and the Signal Heat / agent panels are LEGACY consensus telemetry — not driving trades.';
-    if (d.trend_position === 'long' && d.position_entry) {
-      const st = $('trend-state');
-      if (st) st.textContent += '  ·  entry $' + Math.round(d.position_entry).toLocaleString()
-        + '  ·  ' + ((d.unrealized_pct||0) >= 0 ? '+' : '') + (d.unrealized_pct||0).toFixed(1) + '%';
+
+    if (long && d.position_entry) {
+      html += ` &nbsp;·&nbsp; entry $${Math.round(d.position_entry).toLocaleString()}` +
+              ` &nbsp;·&nbsp; ` + tint(d.unrealized_pct || 0, pct(d.unrealized_pct || 0));
     }
+    $('trend-state').innerHTML = html;
+    $('trend-note').textContent = 'Header regime/ADX/HMM and the Signal Heat / agent panels are LEGACY consensus telemetry — not driving trades.';
   } else {
     $('trend-state').textContent = '';
     $('trend-note').textContent = '';
