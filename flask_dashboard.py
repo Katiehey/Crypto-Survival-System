@@ -216,6 +216,7 @@ def fetch_data() -> dict[str, Any]:
                 # / $0.00 PnL while sitting on a +13% unrealised gain.
                 if st.get("balance") is not None:
                     d["balance"] = float(st["balance"])       # bot is authoritative
+                    d["_balance_from_bot"] = True
                 det = st.get("position_detail") or {}
                 if d["trend_position"] == "long" and det.get("entry_price"):
                     entry = float(det["entry_price"])
@@ -270,7 +271,12 @@ def fetch_data() -> dict[str, Any]:
                 curve              = config.STARTING_CAPITAL + all_pnl["pnl_usdt"].cumsum()
                 equity             = pd.concat([pd.Series([float(config.STARTING_CAPITAL)]), curve],
                                                ignore_index=True)
-                d["balance"]       = float(equity.iloc[-1])
+                # Don't clobber the bot's own balance. Under trend_filter the bot
+                # persists its live figure (which includes the open position's entry
+                # fee); re-deriving it from closed trades alone drops that fee and
+                # leaves equity - unrealised != cash on screen.
+                if not d.get("_balance_from_bot"):
+                    d["balance"]   = float(equity.iloc[-1])
                 d["peak"]          = float(equity.max())
                 d["drawdown_pct"]  = max(0.0, (d["peak"] - d["balance"]) / d["peak"] * 100)
                 d["total_trades"]  = int(total_count["cnt"].iloc[0])
