@@ -751,12 +751,15 @@ function render(d) {
   // months while this strategy holds, which looks like a stalled bot.
   const eq = (d.equity === undefined) ? d.balance : d.equity;
   $('equity').textContent = '$' + eq.toFixed(2);
-  const up = d.unrealized_pnl || 0, upc = d.unrealized_pct || 0;
+  // NB: `up` is already declared at the top of this function for price direction.
+  // Reusing it was a parse error, which killed the ENTIRE script and blanked
+  // every field on the page — not just this one.
+  const unrl = d.unrealized_pnl || 0, unrlPct = d.unrealized_pct || 0;
   const uel = $('unrealized');
   if (d.trend_position === 'long' && d.position_size) {
-    uel.textContent = (up >= 0 ? '+$' : '-$') + Math.abs(up).toFixed(2)
-                    + '  (' + (upc >= 0 ? '+' : '') + upc.toFixed(1) + '%)';
-    uel.style.color = up >= 0 ? '#3fb950' : '#f85149';
+    uel.textContent = (unrl >= 0 ? '+$' : '-$') + Math.abs(unrl).toFixed(2)
+                    + '  (' + (unrlPct >= 0 ? '+' : '') + unrlPct.toFixed(1) + '%)';
+    uel.style.color = unrl >= 0 ? '#3fb950' : '#f85149';
   } else {
     uel.textContent = '—';
     uel.style.color = '';
