@@ -114,6 +114,9 @@ def fetch_data() -> dict[str, Any]:
         # Active strategy + trend-filter state (what the bot ACTUALLY trades on).
         "strategy": getattr(config, "STRATEGY", "consensus"),
         "chart_timeframe": config.TIMEFRAME,
+        "equity": config.STARTING_CAPITAL, "unrealized_pnl": 0.0,
+        "unrealized_pct": 0.0, "position_entry": 0.0, "position_size": 0.0,
+        "position_value": 0.0, "position_opened": "",
         "trend_sma_period": getattr(config, "TREND_SMA_PERIOD", 150),
         "trend_sma": 0, "trend_close": 0, "trend_gap_pct": 0,
         "trend_want_long": False, "trend_position": "unknown",
@@ -206,6 +209,27 @@ def fetch_data() -> dict[str, Any]:
                 st = json.loads(Path(config.TREND_STATE_FILE).read_text()) \
                     if Path(config.TREND_STATE_FILE).exists() else {}
                 d["trend_position"] = st.get("position", "unknown")
+
+                # Mark the OPEN position to market. The trades table only holds
+                # completed round trips, so while this strategy holds (months at a
+                # time) the account reads as flat and unchanged — it showed $29.93
+                # / $0.00 PnL while sitting on a +13% unrealised gain.
+                if st.get("balance") is not None:
+                    d["balance"] = float(st["balance"])       # bot is authoritative
+                det = st.get("position_detail") or {}
+                if d["trend_position"] == "long" and det.get("entry_price"):
+                    entry = float(det["entry_price"])
+                    size  = float(det.get("size_usdt") or 0)
+                    live  = float(d["price"] or last)
+                    d["position_entry"]   = entry
+                    d["position_size"]    = size
+                    d["position_value"]   = size * (live / entry) if entry else 0.0
+                    d["unrealized_pnl"]   = d["position_value"] - size
+                    d["unrealized_pct"]   = (live / entry - 1) * 100 if entry else 0.0
+                    d["equity"]           = d["balance"] + d["unrealized_pnl"]
+                    d["position_opened"]  = det.get("entered_at", "")
+                else:
+                    d["equity"] = d["balance"]
                 # The price chart defaults to config.TIMEFRAME (4h), but this
                 # strategy decides on daily candles — showing 4h means watching a
                 # different series than the one making decisions. Reuse the daily
@@ -370,7 +394,9 @@ HTML = """<!DOCTYPE html>
       <div class="card-header fw-bold">ACCOUNT</div>
       <div class="card-body p-3">
         <div class="row g-2">
-          <div class="col-6"><div class="stat-label">Balance</div><div class="stat-value" id="balance">$—</div></div>
+          <div class="col-6"><div class="stat-label">Equity</div><div class="stat-value" id="equity">$—</div></div>
+          <div class="col-6"><div class="stat-label">Unrealised</div><div class="stat-value" id="unrealized">—</div></div>
+          <div class="col-6"><div class="stat-label">Cash</div><div class="stat-value" id="balance">$—</div></div>
           <div class="col-6"><div class="stat-label">Peak</div><div class="stat-value" id="peak">$—</div></div>
           <div class="col-6"><div class="stat-label">Drawdown</div><div class="stat-value" id="drawdown">—</div></div>
           <div class="col-6"><div class="stat-label">PnL Today</div><div class="stat-value" id="daily-pnl">—</div></div>
@@ -600,6 +626,11 @@ function render(d) {
       ` &nbsp; signal: <b>${wantLong ? 'LONG' : 'FLAT'}</b>` +
       (long !== wantLong ? ' <span style="color:#e3b341">(flips next daily close)</span>' : '');
     $('trend-note').textContent = 'Header regime/ADX/HMM and the Signal Heat / agent panels are LEGACY consensus telemetry — not driving trades.';
+    if (d.trend_position === 'long' && d.position_entry) {
+      const st = $('trend-state');
+      if (st) st.textContent += '  ·  entry $' + Math.round(d.position_entry).toLocaleString()
+        + '  ·  ' + ((d.unrealized_pct||0) >= 0 ? '+' : '') + (d.unrealized_pct||0).toFixed(1) + '%';
+    }
   } else {
     $('trend-state').textContent = '';
     $('trend-note').textContent = '';
@@ -710,6 +741,20 @@ function render(d) {
 
   // Account
   $('balance').textContent     = '$' + d.balance.toFixed(2);
+  // Equity marks the OPEN position to market. Cash alone reads unchanged for
+  // months while this strategy holds, which looks like a stalled bot.
+  const eq = (d.equity === undefined) ? d.balance : d.equity;
+  $('equity').textContent = '$' + eq.toFixed(2);
+  const up = d.unrealized_pnl || 0, upc = d.unrealized_pct || 0;
+  const uel = $('unrealized');
+  if (d.trend_position === 'long' && d.position_size) {
+    uel.textContent = (up >= 0 ? '+$' : '-$') + Math.abs(up).toFixed(2)
+                    + '  (' + (upc >= 0 ? '+' : '') + upc.toFixed(1) + '%)';
+    uel.style.color = up >= 0 ? '#3fb950' : '#f85149';
+  } else {
+    uel.textContent = '—';
+    uel.style.color = '';
+  }
   $('peak').textContent        = '$' + d.peak.toFixed(2);
   $('drawdown').innerHTML      = `<span style="color:${d.drawdown_pct>10?'#f85149':'#3fb950'}">${d.drawdown_pct.toFixed(2)}%</span>`;
   $('daily-pnl').innerHTML     = `<span style="color:${d.daily_pnl>=0?'#3fb950':'#f85149'}">${d.daily_pnl>=0?'+':''}$${Math.abs(d.daily_pnl).toFixed(4)}</span>`;
