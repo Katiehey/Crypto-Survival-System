@@ -1,6 +1,6 @@
 # Strategy Research Log
 
-Twelve hypotheses tested against real data with fee accounting, benchmarks, and
+Thirteen hypotheses tested against real data with fee accounting, benchmarks, and
 fragility checks. Four real effects found; three need shorting or more capital, but
 the fourth — a long/flat 150-day BTC trend filter — is executable at $30 and is now
 **deployed live in paper mode** (hypothesis 12, Aug 2026).
@@ -26,6 +26,7 @@ that looked strong at first pass.
 | 10 | Token unlock drift | **Real** | −2.99% 7d median excess, t=−4.31, 62% win — but only 2–5% CAGR when traded |
 | 11 | LLM vs keyword news sentiment | Rejected | r collapses 0.312 → 0.015 once look-ahead removed; news is priced |
 | 12 | Long/flat 150d trend filter (BTC) | **Real & deployed** | CAGR ~35% ≈ B&H, maxDD ~−46% vs ~−80%; survives rolling walk-forward + whole-grid OOS. Insurance, not alpha |
+| 13 | Trailing stop added to #12 | Rejected | Only the near-inert 25% stop beat plain on Calmar, and that gain is one year: remove 2019 and it flips to −29.6 pp. Active stops are destructive — a 5% trail cuts time-in-market from 51% to 6% |
 
 **Conclusion:** real inefficiencies exist and are findable. Effects #5/#8/#10 require
 shorting or capital a $30 spot account lacks. But #12 breaks the deadlock: judged on
@@ -114,7 +115,27 @@ forward correlation if the windows overlap by even one day.
 > Ask of any event study: was every input observable before the measurement
 > window opened? Controlling for prior returns does NOT fix within-window leakage.
 
-### 10. Minimum position size is a real constraint
+### 10. An improvement that lives in one year is not an improvement
+Adding a trailing stop to #12 looked like a win at first pass: the 25% variant
+raised Calmar 0.79 -> 0.88 and cut maxDD 46.2% -> 42.2%.
+
+Year-by-year, the stop changed anything in only 3 of 9 years:
+```
+2019  +48.3 pp     2021  -41.1 pp     2018  +11.5 pp
+net   +18.6 pp     without 2019 alone:  -29.6 pp
+```
+The whole result was 2019. It also fired just 5 times in 9 years — the "best"
+setting was the one closest to doing nothing, which is itself a warning sign.
+
+Tighter stops were unambiguously destructive: a 5% trail cut CAGR from 36.3% to
+8.4% and time-in-market from 51% to 6%. BTC retraces 20-30% *inside* uptrends,
+so an active stop fires on ordinary volatility and then locks you out of the
+recovery.
+
+> When the best parameter in a sweep is the one that barely acts, you have
+> measured the cost of acting, not the value of the feature.
+
+### 11. Minimum position size is a real constraint
 ```
 Binance min notional      $5
 Equity                   $30    -> forced position = 16.7% of account
@@ -205,5 +226,5 @@ data; long/flat state persists across restarts in `ops/trend_state.json`. Backte
 
 ---
 
-*Twelve hypotheses. Four real effects. One convertible into money at $30 — now live.*
+*Thirteen hypotheses. Four real effects. One convertible into money at $30 — now live.*
 *Total cost of finding out: $0.07 in paper trading losses.*
